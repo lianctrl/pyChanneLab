@@ -1,79 +1,76 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 import pandas as pd
 from scipy.integrate import odeint
-from scipy.optimize import curve_fit
-from scipy.optimize import minimize
-from scipy.optimize import least_squares
 from scipy.optimize import differential_evolution
 
 
-############################## START EXPERIMENTAL DATA LOAD #########################
+''' START EXPERIMENTAL DATA LOAD '''
 
-folder="New-Datasets/"
+folder = "New-Datasets/"
 
-## Activation dataset
+# Activation dataset
 
 dataset_act = pd.read_csv(folder+'Activation_M373I.csv', sep=',', skiprows=1)
 
 act_data = dataset_act.to_numpy()
 
-x_act_WT = act_data[:,0]
-y_act_WT = act_data[:,1]
-yerr_act_WT = act_data[:,2]
+x_act_WT = act_data[:, 0]
+y_act_WT = act_data[:, 1]
+yerr_act_WT = act_data[:, 2]
 
-## Inactivation dataset
+# Inactivation dataset
 
 dataset_inact = pd.read_csv(folder+"Inactivation_M373I.csv", sep=',', skiprows=1)
 
 inact_data = dataset_inact.to_numpy()
 
-x_inact_WT = inact_data[:,0]
-y_inact_WT = inact_data[:,1]
-yerr_inact_WT = inact_data[:,2]
+x_inact_WT = inact_data[:, 0]
+y_inact_WT = inact_data[:, 1]
+yerr_inact_WT = inact_data[:, 2]
 
-## CS recovery dataser
+# CS recovery dataser
 
 dataset_cs = pd.read_csv(folder+"CS-Inactivation_M373I.csv", sep=',', skiprows=1)
 
 cs_data = dataset_cs.to_numpy()
 
-x_cs_WT = cs_data[:,0]
-y_cs_WT = cs_data[:,1]
-yerr_cs_WT = cs_data[:,2]
+x_cs_WT = cs_data[:, 0]
+y_cs_WT = cs_data[:, 1]
+yerr_cs_WT = cs_data[:, 2]
 
-## Recovery dataset
+# Recovery dataset
 
 dataset_rec = pd.read_csv(folder+"Recovery_M373I.csv", sep=',', skiprows=1)
 
 rec_data = dataset_rec.to_numpy()
 
-x_rec_WT = rec_data[:,0]
-y_rec_WT = rec_data[:,1]
-yerr_rec_WT = rec_data[:,2]
+x_rec_WT = rec_data[:, 0]
+y_rec_WT = rec_data[:, 1]
+yerr_rec_WT = rec_data[:, 2]
 
-########################### END EXPERIMENTAL DATA LOAD #################################
+''' END EXPERIMENTAL DATA LOAD '''
 
 # Guess of initial conditions for the states
-C0_0=0.4390
-C1_0=0.2588
-C2_0=0.0572
-C3_0=0.0056
-C4_0=0.0002
-I0_0=0.0128
-I1_0=0.0553
-I2_0=0.0894
-I3_0=0.0642
-I4_0=0.0172
-O_0=0.0001
+C0_0 = 0.4390
+C1_0 = 0.2588
+C2_0 = 0.0572
+C3_0 = 0.0056
+C4_0 = 0.0002
+I0_0 = 0.0128
+I1_0 = 0.0553
+I2_0 = 0.0894
+I3_0 = 0.0642
+I4_0 = 0.0172
+O_0 = 0.0001
 
 # Pack up the initial conditions:
 
 S0 = [C0_0, C1_0, C2_0, C3_0, C4_0, I0_0, I1_0, I2_0, I3_0, I4_0, O_0]
 
-########################## START PROTOCOLS ############################################
-def SimAct (S, t, p):
+''' START PROTOCOLS '''
+
+
+def SimAct(S, t, p):
 
     C0 = S[0]
     C1 = S[1]
@@ -87,40 +84,38 @@ def SimAct (S, t, p):
     I4 = S[9]
     O = S[10]
 
+    # constants
 
-    #constants
-
-    T = 291.0 #K or 18 degree celsius
-    e =  1.602176634 * (10**-19.0) # C
-    K_B = 1.380649 * (10**-23.0) # J*K^-1
+    T = 291.0  # K or 18 degree celsius
+    e = 1.602176634 * (10**-19.0)  # C
+    K_B = 1.380649 * (10**-23.0)  # J*K^-1
 
     exp_factor = (e/(K_B * T)) * (10**-3)
 
-    #Voltage sequences
+    # Voltage sequences
 
-    V = 0.0 #mV
+    V = 0.0  # mV
 
     if 0 <= t < 0.5:
-        V = -90.0 # mV
+        V = -90.0  # mV
 
     if 0.5 <= t < 0.55:
-        V = p[11] # Vtest
+        V = p[11]  # Vtest
 
     if t >= 0.55:
-        V = -50.0 # mV
+        V = -50.0  # mV
 
+    k_CI = p[8]  # 1.301e+02 #s^-1
+    k_IC = p[9]  # 3.900e-01   #s^-1 0.20
 
-    k_CI = p[8] #1.301e+02 #s^-1
-    k_IC = p[9] # 3.900e-01   #s^-1 0.20
+    f = p[10]  # 4.315e-01 # 0.31
 
-    f = p[10] # 4.315e-01 # 0.31
-
-    #voltage dependent rate constants
+    # voltage dependent rate constants
 
     alpha = p[0] * np.exp(p[1] * (V * exp_factor))
-    beta =  p[2] * np.exp(-1.0 * p[3] * (V * exp_factor))
-    k_CO =  p[4] * np.exp(p[5] * (V * exp_factor))
-    k_OC =  p[6] * np.exp(-1.0 * p[7] * (V * exp_factor))
+    beta = p[2] * np.exp(-1.0 * p[3] * (V * exp_factor))
+    k_CO = p[4] * np.exp(p[5] * (V * exp_factor))
+    k_OC = p[6] * np.exp(-1.0 * p[7] * (V * exp_factor))
 
     # ODEs
 
@@ -128,7 +123,7 @@ def SimAct (S, t, p):
     dC1dt = 4.0 * alpha * C0 + 2.0 * beta * C2 + (k_IC/(f**3.0)) * I1 - (k_CI*(f**3.0) + beta + 3.0 * alpha) * C1
     dC2dt = 3.0 * alpha * C1 + 3.0 * beta * C3 + (k_IC/(f**2.0)) * I2 - (k_CI*(f**2.0) + 2.0 * beta + 2.0 * alpha) * C2
     dC3dt = 2.0 * alpha * C2 + 4.0 * beta * C4 + (k_IC/f) * I3 - (k_CI*f + 3.0 * beta + 1.0 * alpha) * C3
-    dC4dt = 1.0 * alpha * C3 + k_OC * O + k_IC * I4 - (k_CI + k_CO + 4.0 * beta) * C4 
+    dC4dt = 1.0 * alpha * C3 + k_OC * O + k_IC * I4 - (k_CI + k_CO + 4.0 * beta) * C4
 
     dI0dt = beta * f * I1 + (k_CI*(f**4.0)) * C0 - (k_IC/(f**4.0) + 4.0 * (alpha/f)) * I0
     dI1dt = 4.0 * (alpha/f) * I0 + 2.0 * beta * f * I2 + (k_CI*(f**3.0)) * C1 - (k_IC/(f**3.0) + beta * f + 3.0 * (alpha/f)) * I1

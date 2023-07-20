@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import filedialog
 from Input.loader import plot_data
 
+
 class PlotApp:
 
     def __init__(self, master):
@@ -27,7 +28,7 @@ class PlotApp:
     def plot_data(self):
         plot_data(self.file_paths)
 
+
 root = tk.Tk()
 app = PlotApp(root)
 root.mainloop()
-
