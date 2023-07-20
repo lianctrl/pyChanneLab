@@ -468,66 +468,62 @@ def Csi_LS_func(x, teta):
 
         max_currents[i] = max_conductance[i] * (Vtest - Vprep)
 
-    I_Imax  = (max_currents)/(np.amax(max_currents))
+    I_Imax = (max_currents)/(np.amax(max_currents))
 
     return I_Imax
 
-def SimRec (C, t, p):
 
-    C0=C[0]
-    C1=C[1]
-    C2=C[2]
-    C3=C[3]
-    C4=C[4]
-    I0=C[5]
-    I1=C[6]
-    I2=C[7]
-    I3=C[8]
-    I4=C[9]
-    O=C[10]
+def SimRec(C, t, p):
 
+    C0 = C[0]
+    C1 = C[1]
+    C2 = C[2]
+    C3 = C[3]
+    C4 = C[4]
+    I0 = C[5]
+    I1 = C[6]
+    I2 = C[7]
+    I3 = C[8]
+    I4 = C[9]
+    O = C[10]
 
-    #constants
+    # constants
 
-    T = 291.0 #K or 18 degree celsius
-    e =  1.602176634 * (10**-19.0) # C
-    K_B = 1.380649 * (10**-23.0) # J*K^-1
+    T = 291.0  # K or 18 degree celsius
+    e = 1.602176634 * (10**-19.0)  # C
+    K_B = 1.380649 * (10**-23.0)  # J*K^-1
 
     exp_factor = (e/(K_B * T)) * (10**-3)
 
-    #Voltage sequences
+    # Voltage sequences
 
-    V = 0.0 #mV
+    V = 0.0  # mV
 
     if 0 <= t < 0.50:
-        V=-90.0
+        V = -90.0
 
     if 0.50 <= t <= 1.50:
-        V=60.0
+        V = 60.0
 
     if 1.50 < t < p[11]:
-        V=-90.0
+        V = -90.0
 
     if p[11] <= t <= 2.650:
-        V=60.0
+        V = 60.0
 
     if t > 2.650:
-        V=60.0
-
+        V = 60.0
 
     k_CI = p[8]
-
     k_IC = p[9]
-
     f = p[10]
 
-    #voltage dependent rate constants
+    # voltage dependent rate constants
 
     alpha = p[0] * np.exp(p[1] * (V * exp_factor))
     beta = p[2] * np.exp(-1.0 * p[3] * (V * exp_factor))
     k_CO = p[4] * np.exp(p[5] * (V * exp_factor))
     k_OC = p[6] * np.exp(-1.0 * p[7] * (V * exp_factor))
-
 
     # ODEs
 
@@ -547,50 +543,50 @@ def SimRec (C, t, p):
 
     return (dC0dt, dC1dt, dC2dt, dC3dt, dC4dt, dI0dt, dI1dt, dI2dt, dI3dt, dI4dt, dOdt)
 
+
 def Rec_Protocol(max_t, Deltat):
-    min_t = 0.0 #mV
+    min_t = 0.0  # mV
 
-    t_pulse = np.linspace(min_t,max_t,np.abs(int((max_t-min_t)/Deltat))+1)
+    t_pulse = np.linspace(min_t, max_t, np.abs(int((max_t-min_t)/Deltat))+1)
 
-    return t_pulse #array of testing prepulses
+    return t_pulse  # array of testing prepulses
+
 
 def Rec_LS_func(x, teta):
 
-    Vhold   =  -90.0 # mV
-    Vpulse  =   60.0 # mV
-    Vinter  =  -90.0 # mV
-    Vrep    =   60.0 # mV
-    Vfin    =   60.0 # mV
+    Vhold = -90.0  # mV
+    Vpulse = 60.0  # mV
+    # Vinter = -90.0  # mV
+    # Vrep = 60.0  # mV
+    # Vfin = 60.0  # mV
 
     # conductance parameters
-
-    #EK      = 0.0    # mV
-    gK_max  = 33.2     # nS
+    # EK      = 0.0    # mV
+    gK_max = 33.2  # nS
 
     # Membrane capacitance
-    Cm      = 1.0    # microF cm^-2
+    # Cm = 1.0    # microF cm^-2
 
     # Time of experiments
-    tini_eq   = 0    # s
-    tini_prep = 0.50 # s
-    tini_pulse = 1.50 # s
+    tini_eq = 0  # s
+    tini_prep = 0.50  # s
+    tini_pulse = 1.50  # s
+    tend = 3.00  # s
 
-    tend = 3.00 # s
-
-    pulse_interval = 0.030 # s
-    max_pulse_interval = 0.570 # s
-    min_pulse_interval = 0.000 # s
+    pulse_interval = 0.030  # s
+    max_pulse_interval = 0.570  # s
+    min_pulse_interval = 0.000  # s
 
     # Time discretiztion
     dt = 1e-5
 
     # time array
-    t = np.arange(tini_eq,tend+dt,dt)
+    t = np.arange(tini_eq, tend+dt, dt)
     Npoints = len(t)
 
     steps = np.abs(int((max_pulse_interval-min_pulse_interval)/pulse_interval)) + 1
 
-    Open_states = np.zeros((Npoints,steps))
+    Open_states = np.zeros((Npoints, steps))
 
     max_conductance = np.zeros(steps)
 
@@ -600,30 +596,27 @@ def Rec_LS_func(x, teta):
 
     max_currents_prep = np.zeros(steps)
 
-
-    for i in range (0,steps):
+    for i in range(0, steps):
 
         time_pulse = tini_pulse + pulse_interval * (i)
 
         gamma = np.append(teta, time_pulse)
 
-        f = lambda S,t: SimRec(S, t, gamma)
+        f = lambda S, t: SimRec(S, t, gamma)
 
         r = odeint(f, S0, x)
 
-        Open_states[:,i] = r[:,10]
+        Open_states[:, i] = r[:, 10]
+        max_conductance[i] = gK_max * np.amax(r[int(time_pulse/dt):, 10])
+        max_conductance_prep[i] = gK_max * np.amax(r[int(tini_prep/dt):int(tini_pulse/dt), 10])
 
-        max_conductance[i] = gK_max * np.amax(r[int(time_pulse/dt):,10])
-
-        max_conductance_prep[i] = gK_max * np.amax(r[int(tini_prep/dt):int(tini_pulse/dt),10])
-
-        # Compute the current proportional to the open channel conductance and potential applied
+        # Compute the current proportional to the open channel
+        # conductance and potential applied
 
         max_currents[i] = max_conductance[i] * (Vpulse - Vhold)
+        max_currents_prep[i] = max_conductance_prep[i] * (Vpulse - Vhold)
 
-        max_currents_prep[i] = max_conductance_prep[i] * (Vpulse - Vhold) # nS * mV = pA
-
-    I_Imax = np.true_divide(max_currents,max_currents_prep)
+    I_Imax = np.true_divide(max_currents, max_currents_prep)
 
     return I_Imax
 
@@ -635,67 +628,58 @@ def residual_Tot(p):
     tend = 3.00
     dt = 1e-5
 
-    t = np.arange(tini,tend+dt,dt)
-    Npoints = len(t)
+    t = np.arange(tini, tend+dt, dt)
+    # Npoints = len(t)
 
-    ################## START OF THE 4 VOLTAGE PROTOCOLS ###################
+    ''' START OF THE 4 VOLTAGE PROTOCOLS '''
 
     # ACTIVATION SEQUENCE PROTOCOL
-
-    #here experimental data imported with Pandas in initial section
-    sq_err_act = np.sum(np.subtract(y_act_WT,Act_LS_func(t,p))**2)
-
+    # here experimental data imported with Pandas in initial section
+    sq_err_act = np.sum(np.subtract(y_act_WT, Act_LS_func(t, p))**2)
     act_cost_func = (1.0/len(y_act_WT)) * sq_err_act
 
     # INACTIVATION SEQUENCE PROTOCOL
-
-    #here experimental data imported with Pandas in initial section
-    sq_err_inact = np.sum(np.subtract(y_inact_WT,Inact_LS_func(t,p))**2)
-
+    # here experimental data imported with Pandas in initial section
+    sq_err_inact = np.sum(np.subtract(y_inact_WT, Inact_LS_func(t, p))**2)
     inact_cost_func = (1.0/len(y_inact_WT)) * sq_err_inact
 
     # CS INACTIVATION SEQUENCE PROTOCOL
-
-    #here experimental data imported with Pandas in initial section
-    sq_err_csi = np.sum(np.subtract(y_cs_WT,Csi_LS_func(t,p))**2)
-
+    # here experimental data imported with Pandas in initial section
+    sq_err_csi = np.sum(np.subtract(y_cs_WT, Csi_LS_func(t, p))**2)
     csi_cost_func = (1.0/len(y_cs_WT)) * sq_err_csi
 
     # RECOVERY SEQUENCE PROTOCOL
-
-    #here experimental data imported with Pandas in initial section
-    sq_err_rec = np.sum(np.subtract(y_rec_WT,Rec_LS_func(t,p))**2)
-
+    # here experimental data imported with Pandas in initial section
+    sq_err_rec = np.sum(np.subtract(y_rec_WT, Rec_LS_func(t, p))**2)
     rec_cost_func = (1.0/len(y_rec_WT)) * sq_err_rec
 
-    ################## END OF THE 4 VOLTAGE PROTOCOLS ###################
+    ''' END OF THE 4 VOLTAGE PROTOCOLS '''
 
     # sum of the three protocols cost function
-
     return (act_cost_func + inact_cost_func + csi_cost_func + rec_cost_func)
 
-# Main
 
-def iteration(xk,convergence):
+''' Main '''
+
+
+def iteration(xk, convergence):
     print('Finished iteration')
     print(xk)
 
-# set the guess based on previous works
 
-guess = np.array([450,0.23,2,2.2,160,0.27,245,0.33,25,0.3,0.37])
+# set the guess based on previous works
+guess = np.array([450, 0.23, 2, 2.2, 160, 0.27, 245, 0.33, 25, 0.3, 0.37])
 
 # set boundaries for parameters based on physical reasoning
-
-boundaries = ((0.0,2000.0),(0.0,5.0),(0.0,100.0),(0.0,5.0),(0.0,1000.0),(0.0,5.0),\
-              (0.0,1000.0),(0.0,5.0),(0.0,2000.0),(0.0,100.0),(0.0,1.0))
+boundaries = ((0.0, 2000.0), (0.0, 5.0), (0.0, 100.0), (0.0, 5.0), (0.0, 1000.0)
+              (0.0, 5.0), (0.0, 1000.0), (0.0, 5.0), (0.0, 2000.0), (0.0, 100.0)
+              (0.0, 1.0))
 
 # Run local optimization for the cost function
-
 # result = minimize(residual_Tot, guess, bounds=boundaries, method='L-BFGS-B',\
 #                   options={'maxiter':15000,'maxfev':50000})
 
 # Rub global optimization for the cost function
-
-results = differential_evolution(residual_Tot, bounds=boundaries, maxiter=2000,\
+results = differential_evolution(residual_Tot, bounds=boundaries, maxiter=2000,
                                  workers=-1, callback=iteration)
-print (results)
+print(results)

@@ -1,10 +1,10 @@
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
 def plot_data(file_paths):
     num_files = len(file_paths)
-    fig, axes = plt.subplots(nrows=num_files, ncols=2, figsize=(8, num_files*4)), sharex=True)
+    fig, axes = plt.subplots(nrows=num_files, ncols=2, figsize=(8, num_files*4), sharex=True)
 
     for i, file_path in enumerate(file_paths):
         df = pd.read_csv(file_path, header=1)

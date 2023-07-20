@@ -1,4 +1,4 @@
-import numpy as np
+# import numpy as np
 
 class MarkovModel:
     def __init__(self):
@@ -14,4 +14,3 @@ class MarkovModel:
 
     def get_transition_probabilities(self):
         return self.transition_probabilities
-

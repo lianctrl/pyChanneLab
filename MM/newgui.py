@@ -69,6 +69,7 @@ class MarkovModelEditor(tk.Frame):
 #    def get_transition_probabilities(self):
 #        return self.markov_model.get_transition_probabilities
 
+
 root = tk.Tk()
 app = MarkovModelEditor(root)
 root.mainloop()
