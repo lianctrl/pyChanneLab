@@ -2,10 +2,11 @@ import tkinter as tk
 import tkinter.simpledialog as simpledialog
 
 
-class Circle:
+class State:
     def __init__(self, canvas, x, y, name):
         self.canvas = canvas
-        self.item = canvas.create_oval(x-20, y-20, x+20, y+20, fill='white', outline='black')
+        self.item = canvas.create_oval(x-20, y-20, x+20, y+20,
+                                       fill='lightblue', outline='black')
         self.canvas.tag_bind(self.item, '<Button1-Motion>', self.move)
         self.x = x
         self.y = y
@@ -24,7 +25,7 @@ class Circle:
             arrow.redraw()
 
 
-class Arrow:
+class Transition:
     def __init__(self, canvas, start, end, name):
         self.canvas = canvas
         self.start = start
@@ -47,16 +48,17 @@ class Arrow:
 class App:
     def __init__(self, master):
         self.master = master
+        self.master.title("Markov Model Editor")
         self.canvas = tk.Canvas(master, width=500, height=500)
         self.canvas.pack()
         self.circles = []
         self.arrows = []
 
-        self.add_circle_button = tk.Button(master, text='Add Circle',
+        self.add_circle_button = tk.Button(master, text='Add State',
                                            command=self.add_circle)
         self.add_circle_button.pack(side=tk.LEFT)
 
-        self.add_arrow_button = tk.Button(master, text='Add Arrow',
+        self.add_arrow_button = tk.Button(master, text='Add Transition',
                                           command=self.add_arrow)
         self.add_arrow_button.pack(side=tk.LEFT)
 
@@ -65,29 +67,33 @@ class App:
         self.clear_button.pack(side=tk.LEFT)
 
     def add_circle(self):
-        name = simpledialog.askstring('Circle Name', 'Enter a name for the circle:')
+        name = simpledialog.askstring('State Name', 'Enter a name for the'
+                                      ' State:')
         if not name:
             return
-        circle = Circle(self.canvas, 250, 250, name)
-        self.circles.append(circle)
+        states = State(self.canvas, 250, 250, name)
+        self.circles.append(states)
 
     def add_arrow(self):
         if len(self.circles) < 2:
             return
-        start_index = simpledialog.askinteger('Start Circle', 'Enter the index'
-                                              'of the start circle:')
-        if start_index is None or start_index < 0 or start_index >= len(self.circles):
+        start_index = simpledialog.askinteger('Start State', 'Enter the index'
+                                              'of the starting state:')
+        if start_index is None or start_index < 0 or \
+           start_index >= len(self.circles):
             return
-        end_index = simpledialog.askinteger('End Circle', 'Enter the index of'
-                                            ' the end circle:')
-        if end_index is None or end_index < 0 or end_index >= len(self.circles) or end_index == start_index:
+        end_index = simpledialog.askinteger('End State', 'Enter the index of'
+                                            ' the ending state:')
+        if end_index is None or end_index < 0 or \
+           end_index >= len(self.circles) or end_index == start_index:
             return
-        name = simpledialog.askstring('Arrow Name', 'Enter name for the arrow:')
+        name = simpledialog.askstring('Transition Name', 'Enter name for '
+                                      'the transition:')
         if not name:
             return
         start = self.circles[start_index]
         end = self.circles[end_index]
-        arrow = Arrow(self.canvas, start, end, name)
+        arrow = Transition(self.canvas, start, end, name)
         self.arrows.append(arrow)
 
     def clear(self):
