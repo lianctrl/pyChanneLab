@@ -1,5 +1,6 @@
 import tkinter as tk
 import tkinter.simpledialog as simpledialog
+import math
 
 
 class State:
@@ -42,8 +43,11 @@ class Transition:
     def redraw(self):
         self.canvas.coords(self.line, self.start.x, self.start.y, self.end.x,
                            self.end.y)
-        self.canvas.coords(self.label, (self.start.x+self.end.x)/2,
-                           (self.start.y+self.end.y)/2)
+        angle = math.atan2(self.end.y - self.start.y,
+                           self.end.x - self.start.x)
+        label_x = (self.start.x + self.end.x) / 2 + 40 * math.cos(angle)
+        label_y = (self.start.y + self.end.y) / 2 + 40 * math.sin(angle)
+        self.canvas.coords(self.label, label_x, label_y)
 
     def set_rate_function(self, rate_function):
         self.rate_function = rate_function
@@ -94,7 +98,8 @@ class App:
             return
         end_name = simpledialog.askstring('End State', 'Enter the name of '
                                           'the ending state:')
-        if not end_name or end_name not in self.circles or end_name == start_name:
+        if not end_name or end_name not in self.circles or\
+           end_name == start_name:
             return
         name = simpledialog.askstring('Transition Name', 'Enter name for'
                                       ' the transition:')
@@ -108,7 +113,7 @@ class App:
             self.arrows.append(arrow)
             if reverse_var.get():
                 arrow_reverse = Transition(self.canvas, end, start, name +
-                                           ' back')
+                                           'bw')
                 self.arrows.append(arrow_reverse)
 
             transition_window.destroy()
