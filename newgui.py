@@ -1,5 +1,6 @@
 import tkinter as tk
 from MM.MMgui import MMeditor  # Import the Markov Model Editor GUI module
+from MM.MMgui import MarkovModel
 
 
 class MainApp(tk.Tk):
