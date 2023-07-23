@@ -1,11 +1,10 @@
 import tkinter as tk
+from tkinter import ttk
 import tkinter.simpledialog as simpledialog
-from tkinter.filedialog import asksaveasfilename
+from tkinter.filedialog import asksaveasfilename, askopenfilename
 import math
 from numpy.random import rand
 import pickle as pkl
-
-from .marmod import MarkovModel
 
 
 class State:
@@ -56,8 +55,27 @@ class Transition:
 
     def set_rate_function(self, rate_function):
         self.rate_function = rate_function
-        self.name = self.name + f" ({rate_function})"
-        self.canvas.itemconfig(self.label, text=self.name, fill='black')
+        self.name = self.name
+        if rate_function is not None:
+            self.canvas.itemconfig(self.label, text=self.name, fill='black')
+        else:
+            self.canvas.itemconfig(self.label, text=self.name, fill='red')
+
+
+class MarkovModel:
+    def __init__(self):
+        self.states = {}
+        self.transitions = []
+
+    def add_state(self, state_name):
+        if state_name not in self.states:
+            self.states[state_name] = len(self.states)
+
+    def add_transition(self, tname, from_state, to_state, rate_function):
+        from_state_idx = self.states[from_state]
+        to_state_idx = self.states[to_state]
+        self.transitions.append((tname, from_state_idx, to_state_idx,
+                                 rate_function))
 
 
 class MMeditor:
@@ -85,9 +103,27 @@ class MMeditor:
                                       command=self.clear)
         self.clear_button.pack(side=tk.LEFT)
 
+        self.table_button = tk.Button(master, text='Show Table',
+                                      command=self.show_table)
+        self.table_button.pack(side=tk.LEFT)
+
+        self.table_frame = tk.Frame(master)
+        self.table_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.table_tree = ttk.Treeview(self.table_frame)
+        self.table_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.table_scroll = ttk.Scrollbar(self.table_frame,
+                                          orient=tk.VERTICAL,
+                                          command=self.table_tree.yview)
+        self.table_tree.configure(yscroll=self.table_scroll.set)
+        self.table_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
         self.export_button = tk.Button(master, text='Export Model',
                                        command=self.export_model)
         self.export_button.pack(side=tk.LEFT)
+
+        self.import_button = tk.Button(master, text='Import Model',
+                                       command=self.import_model)
+        self.import_button.pack(side=tk.LEFT)
 
     def add_circle(self):
         name = simpledialog.askstring('State Name', 'Enter a name'
@@ -219,7 +255,9 @@ class MMeditor:
             from_state = arrow.start.name
             to_state = arrow.end.name
             rate_function = arrow.rate_function
-            markov_model.add_transition(from_state, to_state, rate_function)
+            tname = arrow.name
+            markov_model.add_transition(tname, from_state,
+                                        to_state, rate_function)
 
         # Save the MarkovModel object to a pkl file
         file_path = asksaveasfilename(title="Save Markov Model",
@@ -230,6 +268,76 @@ class MMeditor:
 
         tk.messagebox.showinfo("Success", "Markov Model has been exported "
                                "to a pkl file.")
+
+    def import_model(self):
+        file_path = askopenfilename(title="Import Markov Model",
+                                    filetypes=[("Pickle Files", "*.pkl")])
+
+        if file_path:
+            with open(file_path, "rb") as file:
+                markov_model = pkl.load(file)
+
+            # Clear the current canvas
+            self.clear()
+            tk.messagebox.showinfo("Success", "Markov Model imported ")
+            # Create states from the MarkovModel object
+            for state_name in markov_model.states:
+                x = rand()*self.canvas.winfo_width()
+                y = rand()*self.canvas.winfo_height()
+                state = State(self.canvas, x, y, state_name)
+                self.circles[state_name] = state
+
+            # Create transitions from the MarkovModel object
+            for tname, from_state, to_state, rate_function in markov_model.transitions:
+                from_state_name = list(markov_model.states.keys())[from_state]
+                to_state_name = list(markov_model.states.keys())[to_state]
+                transition = Transition(self.canvas,
+                                        self.circles[from_state_name],
+                                        self.circles[to_state_name], tname)
+                transition.set_rate_function(rate_function)
+                self.arrows.append(transition)
+
+    def show_table(self):
+        # Clear the previous table
+        for item in self.table_tree.get_children():
+            self.table_tree.delete(item)
+
+        # Add columns to the table
+        self.table_tree['columns'] = ('Type', 'Name', 'From State', 'To State',
+                                      'Rate Function')
+        self.table_tree.column('#0', width=0, stretch=tk.NO)
+        self.table_tree.column('Type', anchor=tk.W, width=100)
+        self.table_tree.column('Name', anchor=tk.W, width=100)
+        self.table_tree.column('From State', anchor=tk.W, width=100)
+        self.table_tree.column('To State', anchor=tk.W, width=100)
+        self.table_tree.column('Rate Function', anchor=tk.W, width=200)
+
+        # Add headers
+        self.table_tree.heading('#0', text='', anchor=tk.W)
+        self.table_tree.heading('Type', text='Type', anchor=tk.W)
+        self.table_tree.heading('Name', text='Name', anchor=tk.W)
+        self.table_tree.heading('From State', text='From State', anchor=tk.W)
+        self.table_tree.heading('To State', text='To State', anchor=tk.W)
+        self.table_tree.heading('Rate Function', text='Rate Function',
+                                anchor=tk.W)
+
+        # Add states to the table, commented to avoid crowded table
+#        for state in self.circles.values():
+#            self.table_tree.insert('', tk.END, text='',
+#                                   values=('State', state.name, '', ''))
+
+        # Add transitions to the table
+        for arrow in self.arrows:
+            from_state = arrow.start.name
+            to_state = arrow.end.name
+            rate_function = arrow.rate_function
+            tname = arrow.name
+            self.table_tree.insert('', tk.END, text='',
+                                   values=('Transition', tname, from_state,
+                                           to_state, rate_function))
+
+        # Update the table display
+        self.table_tree.update()
 
 
 if __name__ == "__main__":
