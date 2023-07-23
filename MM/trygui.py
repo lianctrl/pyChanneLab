@@ -2,9 +2,10 @@ import tkinter as tk
 import tkinter.simpledialog as simpledialog
 from tkinter.filedialog import asksaveasfilename
 import math
+from numpy.random import rand
 import pickle as pkl
 
-from marmod import MarkovModel
+from .marmod import MarkovModel
 
 
 class State:
@@ -59,7 +60,7 @@ class Transition:
         self.canvas.itemconfig(self.label, text=self.name, fill='black')
 
 
-class App:
+class MMeditor:
     def __init__(self, master):
         self.master = master
         self.master.title("Markov Model Editor")
@@ -93,7 +94,7 @@ class App:
                                       ' for the State:')
         if not name:
             return
-        x, y = 250, 250
+        x, y = rand()*250, rand()*250
         states = State(self.canvas, x, y, name)
         self.circles[name] = states
 
@@ -231,6 +232,7 @@ class App:
                                "to a pkl file.")
 
 
-root = tk.Tk()
-app = App(root)
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = MMeditor(root)
+    root.mainloop()
