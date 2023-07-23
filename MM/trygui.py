@@ -1,6 +1,10 @@
 import tkinter as tk
 import tkinter.simpledialog as simpledialog
+from tkinter.filedialog import asksaveasfilename
 import math
+import pickle as pkl
+
+from marmod import MarkovModel
 
 
 class State:
@@ -79,6 +83,10 @@ class App:
         self.clear_button = tk.Button(master, text='Clear All',
                                       command=self.clear)
         self.clear_button.pack(side=tk.LEFT)
+
+        self.export_button = tk.Button(master, text='Export Model',
+                                       command=self.export_model)
+        self.export_button.pack(side=tk.LEFT)
 
     def add_circle(self):
         name = simpledialog.askstring('State Name', 'Enter a name'
@@ -165,6 +173,8 @@ class App:
         rate_window.title("Add Rate Function")
         tk.Label(rate_window,
                  text="Which rate function for the transition?").pack()
+        # Below a list of possible functions, must have 1 to 1 correspondence
+        # with functions in Functions/functions.py
         tk.Radiobutton(rate_window, text="Constant: r0",
                        variable=rate_function_var, value="constant").pack()
         tk.Radiobutton(rate_window, text="Linear: r0+r1*x",
@@ -187,6 +197,38 @@ class App:
             self.canvas.delete(arrow.label)
         self.circles = {}
         self.arrows = []
+
+    def export_model(self):
+        # Check if the Markov Model object is not empty
+        if not self.circles or not self.arrows:
+            tk.messagebox.showerror("Error", "The Markov Model is empty."
+                                    " Add states and transitions before"
+                                    " exporting.")
+            return
+
+        # Create a new MarkovModel object
+        markov_model = MarkovModel()
+
+        # Add states to the MarkovModel object
+        for state in self.circles.values():
+            markov_model.add_state(state.name)
+
+        # Add transitions and rate functions to the MarkovModel object
+        for arrow in self.arrows:
+            from_state = arrow.start.name
+            to_state = arrow.end.name
+            rate_function = arrow.rate_function
+            markov_model.add_transition(from_state, to_state, rate_function)
+
+        # Save the MarkovModel object to a pkl file
+        file_path = asksaveasfilename(title="Save Markov Model",
+                                      filetypes=[("Pickle Files", "*.pkl")])
+        if file_path:
+            with open(file_path, "wb") as file:
+                pkl.dump(markov_model, file)
+
+        tk.messagebox.showinfo("Success", "Markov Model has been exported "
+                               "to a pkl file.")
 
 
 root = tk.Tk()
