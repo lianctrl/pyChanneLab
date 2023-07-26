@@ -116,6 +116,8 @@ class ExperimentBuilderApp:
         for segment in self.holding_potentials:
             if isinstance(segment, VariablePotential) or isinstance(segment, VariableTime):
                 nfunc = len(segment.get_voltage_time_data()[0])
+            else:
+                nfunc = 1
 
         voltages = np.zeros((nfunc, len(self.holding_potentials)+1))
         times = np.zeros((nfunc, len(self.holding_potentials)+1))
