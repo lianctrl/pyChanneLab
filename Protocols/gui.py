@@ -1,161 +1,207 @@
 import tkinter as tk
-from tkinter import ttk
-from tkinter import simpledialog, messagebox
 import matplotlib.pyplot as plt
+import numpy as np
 
 
-class SubProtocol:
-    def __init__(self, sub_type, values, time):
-        self.sub_type = sub_type
-        self.values = values
+class HoldingPotential:
+    def __init__(self, voltage, time):
+        self.voltage = voltage
         self.time = time
 
 
-class VoltageProtocol:
-    def __init__(self, name):
-        self.name = name
-        self.sub_protocols = []
+class VariablePotential:
+    def __init__(self, start_v, end_v, delta_v, time):
+        self.start_v = start_v
+        self.end_v = end_v
+        self.delta_v = delta_v
+        self.time = time
 
-    def add_sub_protocol(self, sub_protocol):
-        self.sub_protocols.append(sub_protocol)
+    def get_voltage_time_data(self):
+        voltage_data = np.arange(self.start_v, self.end_v + self.delta_v,
+                                 self.delta_v)
+        time_data = np.full(len(voltage_data), self.time)
+        return voltage_data, time_data
 
 
-class ProtocolCreatorApp:
-    def __init__(self, master):
-        self.master = master
-        self.master.title("Protocol Creator")
+class VariableTime:
+    def __init__(self, start_t, end_t, delta_t, value):
+        self.start_t = start_t
+        self.end_t = end_t
+        self.delta_t = delta_t
+        self.value = value
 
-        self.protocols = []  # List to store the voltage protocols
+    def get_voltage_time_data(self):
+        time_data = np.arange(self.start_t, self.end_t + self.delta_t,
+                              self.delta_t)
+        value_data = np.full(len(time_data), self.value)
+        return value_data, time_data
 
-        self.name_var = tk.StringVar()
 
-        self.name_label = tk.Label(master, text="Protocol Name:")
-        self.name_label.pack()
-        self.name_entry = tk.Entry(master, textvariable=self.name_var)
-        self.name_entry.pack()
+class ExperimentBuilderApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Experiment Builder")
 
-        self.add_holding_button = tk.Button(master, text="Add Holding Sub-Protocol",
-                                            command=self.add_holding_sub_protocol)
-        self.add_holding_button.pack()
+        self.holding_potentials = []
 
-        self.add_variable_button = tk.Button(master, text="Add Variable Sub-Protocol",
-                                             command=self.add_variable_sub_protocol)
-        self.add_variable_button.pack()
+        self.voltage_label = tk.Label(root, text="Voltage (mV):")
+        self.voltage_label.grid(row=0, column=0)
+        self.voltage_entry = tk.Entry(root)
+        self.voltage_entry.grid(row=0, column=1)
 
-        self.protocol_details_label = tk.Label(master, text="")
-        self.protocol_details_label.pack()
+        self.time_label = tk.Label(root, text="Time (s):")
+        self.time_label.grid(row=1, column=0)
+        self.time_entry = tk.Entry(root)
+        self.time_entry.grid(row=1, column=1)
 
-        self.protocol_table = ttk.Treeview(master, columns=("Name", "Type"))
-        self.protocol_table.heading("#0", text="Index")
-        self.protocol_table.heading("Name", text="Name")
-        self.protocol_table.heading("Type", text="Type")
-        self.protocol_table.pack()
+        self.add_button = tk.Button(root, text="Add Holding Potential",
+                                    command=self.add_holding_potential)
+        self.add_button.grid(row=2, columnspan=2)
 
-        self.create_experiment_button = tk.Button(master, text="Create Experiment", command=self.show_experiment_window)
-        self.create_experiment_button.pack()
+        self.holding_listbox = tk.Listbox(root)
+        self.holding_listbox.grid(row=3, columnspan=2)
+        self.holding_listbox.bind('<<ListboxSelect>>', self.on_select_holding)
 
-    def add_holding_sub_protocol(self):
-        voltage = simpledialog.askfloat("Holding Sub-Protocol", "Enter Holding Voltage (or Concentration):")
-        if voltage is None:
-            return
+        self.convert_button = tk.Button(root, text="Convert to Variable",
+                                        command=self.open_variable_dialog)
+        self.convert_button.grid(row=4, columnspan=2)
 
-        time = simpledialog.askfloat("Holding Sub-Protocol", "Enter Holding Time:")
-        if time is None:
-            return
+        self.create_button = tk.Button(root, text="Create Experiment",
+                                       command=self.create_experiment)
+        self.create_button.grid(row=5, columnspan=2)
 
-        sub_protocol = SubProtocol(sub_type="Holding", values=[voltage], time=time)
-        protocol = VoltageProtocol(name=self.name_var.get())
-        protocol.add_sub_protocol(sub_protocol)
-        self.protocols.append(protocol)
-        self.update_protocol_table()
+        self.selected_holding_index = None
 
-    def add_variable_sub_protocol(self):
-        sub_type = simpledialog.askstring("Variable Sub-Protocol",
-                                          "Enter Variable Type (Voltage/Concentration) or time:")
-        if sub_type is None or sub_type.lower() not in ["voltage", "concentration", "time"]:
-            return
+    def add_holding_potential(self):
+        try:
+            voltage = float(self.voltage_entry.get())
+            time = float(self.time_entry.get())
+            holding_potential = HoldingPotential(voltage, time)
+            self.holding_potentials.append(holding_potential)
+            self.holding_listbox.insert(tk.END, f"{voltage} mV, {time} s")
+        except ValueError:
+            pass
 
-        values_str = simpledialog.askstring("Variable Sub-Protocol",
-                                            "Enter Variable Values (comma-separated):")
-        if values_str is None:
-            return
-        if sub_type in ["voltage", "concentration"]:
-            fix_val = simpledialog.askfloat("Variable Sub-Protocol", "Enter time of each sweep:")
-        elif sub_type in ["time"]:
-            fix_val = simpledialog.askfloat("Variable Sub-Protocol", "Enter voltage/concentration of each sweep:")
-        else:
-            return
-        if fix_val is None:
-            return
+    def on_select_holding(self, event):
+        selected_index = self.holding_listbox.curselection()
+        if selected_index:
+            self.selected_holding_index = selected_index[0]
 
-        values = [float(val.strip()) for val in values_str.split(",")]
+    def open_variable_dialog(self):
+        if self.selected_holding_index is not None:
+            holding = self.holding_potentials[self.selected_holding_index]
+            dialog = VariableInputDialog(self.root)
+            self.root.wait_window(dialog.top)
+            if dialog.result:
+                variable_type = dialog.variable_type.get()
+                if variable_type == "Potential":
+                    start_v, end_v, delta_v = dialog.result
+                    variable_potential = VariablePotential(start_v, end_v,
+                                                           delta_v,
+                                                           holding.time)
+                    self.holding_potentials[self.selected_holding_index] = variable_potential
+                    self.holding_listbox.delete(self.selected_holding_index)
+                    self.holding_listbox.insert(self.selected_holding_index,
+                                                f"Variable Potential, {holding.time} s")
+                elif variable_type == "Time":
+                    start_t, end_t, delta_t = dialog.result
+                    variable_time = VariableTime(start_t, end_t, delta_t,
+                                                 holding.voltage)
+                    self.holding_potentials[self.selected_holding_index] = variable_time
+                    self.holding_listbox.delete(self.selected_holding_index)
+                    self.holding_listbox.insert(self.selected_holding_index,
+                                                f"Variable Time, {holding.voltage} mV")
 
-        sub_protocol = SubProtocol(sub_type=sub_type.capitalize(),
-                                   values=values, time=fix_val)
-        protocol = VoltageProtocol(name=self.name_var.get())
-        protocol.add_sub_protocol(sub_protocol)
-        self.protocols.append(protocol)
-        self.update_protocol_table()
+    def create_experiment(self):
+        for segment in self.holding_potentials:
+            if isinstance(segment, VariablePotential) or isinstance(segment, VariableTime):
+                nfunc = len(segment.get_voltage_time_data()[0])
 
-    def show_protocol_details(self, protocol):
-        details = f"Protocol: {protocol.name}\n"
-        for idx, sub_protocol in enumerate(protocol.sub_protocols, start=1):
-            details += f"Sub-Protocol {idx}: {sub_protocol.sub_type}\n" \
-                       f"Values: {', '.join(map(str, sub_protocol.values))}\n" \
-                       f"Time: {sub_protocol.time}\n\n"
-        self.protocol_details_label.config(text=details)
+        voltages = np.zeros((nfunc, len(self.holding_potentials)+1))
+        times = np.zeros((nfunc, len(self.holding_potentials)+1))
 
-    def update_protocol_table(self):
-        # Clear previous data
-        self.protocol_table.delete(*self.protocol_table.get_children())
+        for i in range(nfunc):
+            for j, segment in enumerate(self.holding_potentials):
+                if isinstance(segment, HoldingPotential):
+                    if j == 0:
+                        voltages[i][j] = segment.voltage
 
-        # Insert protocols into the table
-        for idx, protocol in enumerate(self.protocols):
-            self.protocol_table.insert("", "end", values=(idx + 1, protocol.name))
+                    voltages[i][j+1] = segment.voltage
+                    times[i][j+1] = times[i][j] + segment.time
 
-    def show_experiment_window(self):
-        if not self.protocols:
-            messagebox.showerror("Error", "No protocols to create an experiment.")
-            return
+                # check zero also for variable
+                elif isinstance(segment, VariablePotential):
+                    voltage_data, time_data = segment.get_voltage_time_data()
+                    voltages[i][j+1] = voltage_data[i]
+                    times[i][j+1] = times[i][j] + time_data[i]
 
-        experiment_window = tk.Toplevel(self.master)
-        experiment_window.title("Create Experiment")
+                elif isinstance(segment, VariableTime):
+                    voltage_data, time_data = segment.get_voltage_time_data()
+                    voltages[i][j+1] = voltage_data[i]
+                    times[i][j+1] = times[i][j] + time_data[i]
 
-        selected_protocols = []
+        for i in range(nfunc):
+            plt.step(times[i, :], voltages[i, :])
 
-        def add_protocol():
-            selected_idx = protocol_listbox.curselection()
-            for idx in selected_idx:
-                selected_protocols.append(self.protocols[idx])
+        plt.xlabel('Time (s)')
+        plt.ylabel('Voltage (mV)')
+        plt.grid(True)
+        plt.show()
 
-        def create_experiment():
-            # Here you can implement the logic for creating an experiment
-            # using the selected_protocols list.
-            if selected_protocols:
-                protocol_names = [protocol.name for protocol in selected_protocols]
-                messagebox.showinfo("Experiment Created",
-                                    f"Experiment created with protocols: {', '.join(protocol_names)}")
 
-                # You can perform additional actions for the experiment, such as plotting.
-                # Please specify your requirements, and I can assist you further.
+class VariableInputDialog:
+    def __init__(self, parent):
+        top = self.top = tk.Toplevel(parent)
+        self.top.title("Variable Input")
 
-                experiment_window.destroy()
-            else:
-                messagebox.showerror("Error", "No protocols selected for the experiment.")
+        self.variable_type = tk.StringVar()
+        self.variable_type.set("Potential")
 
-        protocol_listbox = tk.Listbox(experiment_window, selectmode=tk.MULTIPLE)
-        for protocol in self.protocols:
-            protocol_listbox.insert(tk.END, protocol.name)
-        protocol_listbox.pack()
+        self.type_label = tk.Label(top, text="Choose Variable Type:")
+        self.type_label.grid(row=0, column=0)
+        self.type_option_menu = tk.OptionMenu(top, self.variable_type,
+                                              "Potential", "Time")
+        self.type_option_menu.grid(row=0, column=1)
 
-        add_button = tk.Button(experiment_window, text="Add Protocol", command=add_protocol)
-        add_button.pack()
+        self.start_label = tk.Label(top, text="Start Value:")
+        self.start_label.grid(row=1, column=0)
+        self.start_entry = tk.Entry(top)
+        self.start_entry.grid(row=1, column=1)
 
-        confirm_button = tk.Button(experiment_window, text="Confirm", command=create_experiment)
-        confirm_button.pack()
+        self.end_label = tk.Label(top, text="End Value:")
+        self.end_label.grid(row=2, column=0)
+        self.end_entry = tk.Entry(top)
+        self.end_entry.grid(row=2, column=1)
+
+        self.delta_label = tk.Label(top, text="Delta Value:")
+        self.delta_label.grid(row=3, column=0)
+        self.delta_entry = tk.Entry(top)
+        self.delta_entry.grid(row=3, column=1)
+
+        self.ok_button = tk.Button(top, text="OK", command=self.ok)
+        self.ok_button.grid(row=4, columnspan=2)
+
+        self.result = None
+
+    def ok(self):
+        variable_type = self.variable_type.get()
+        try:
+            if variable_type == "Potential":
+                start_v = float(self.start_entry.get())
+                end_v = float(self.end_entry.get())
+                delta_v = float(self.delta_entry.get())
+                self.result = (start_v, end_v, delta_v)
+            elif variable_type == "Time":
+                start_t = float(self.start_entry.get())
+                end_t = float(self.end_entry.get())
+                delta_t = float(self.delta_entry.get())
+                self.result = (start_t, end_t, delta_t)
+            self.top.destroy()
+        except ValueError:
+            pass
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = ProtocolCreatorApp(root)
+    app = ExperimentBuilderApp(root)
     root.mainloop()
