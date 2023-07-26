@@ -1,6 +1,8 @@
 import tkinter as tk
+import tkinter.messagebox as messagebox
 import matplotlib.pyplot as plt
 import numpy as np
+import pickle as pkl
 
 
 class HoldingPotential:
@@ -43,6 +45,8 @@ class ExperimentBuilderApp:
         self.root.title("Experiment Builder")
 
         self.holding_potentials = []
+        self.times = None
+        self.values = None
 
         self.voltage_label = tk.Label(root, text="Voltage (mV):")
         self.voltage_label.grid(row=0, column=0)
@@ -66,9 +70,17 @@ class ExperimentBuilderApp:
                                         command=self.open_variable_dialog)
         self.convert_button.grid(row=4, columnspan=2)
 
+        self.clear_button = tk.Button(root, text="Clear Last Item",
+                                      command=self.clear_last_item)
+        self.clear_button.grid(row=5, columnspan=2)
+
         self.create_button = tk.Button(root, text="Create Experiment",
                                        command=self.create_experiment)
-        self.create_button.grid(row=5, columnspan=2)
+        self.create_button.grid(row=6, columnspan=2)
+
+        self.export_button = tk.Button(root, text="Export Experiment",
+                                       command=self.export_experiment)
+        self.export_button.grid(row=7, columnspan=2)
 
         self.selected_holding_index = None
 
@@ -90,6 +102,17 @@ class ExperimentBuilderApp:
     def open_variable_dialog(self):
         if self.selected_holding_index is not None:
             holding = self.holding_potentials[self.selected_holding_index]
+
+            # Check if a variable protocol already exists
+            if any(isinstance(h, VariablePotential) or isinstance(h, VariableTime) for h in self.holding_potentials):
+                messagebox.showerror("Error", "Only one variable protocol can be inserted.")
+                return
+
+            # Check if the first item is a variable protocol
+            if self.selected_holding_index == 0:
+                messagebox.showerror("Error", "The first item cannot be a variable protocol.")
+                return
+
             dialog = VariableInputDialog(self.root)
             self.root.wait_window(dialog.top)
             if dialog.result:
@@ -112,10 +135,19 @@ class ExperimentBuilderApp:
                     self.holding_listbox.insert(self.selected_holding_index,
                                                 f"Variable Time, {holding.voltage} mV")
 
+    def clear_last_item(self):
+        if self.holding_potentials:
+            self.holding_listbox.delete(tk.END)
+            self.holding_potentials.pop()
+
     def create_experiment(self):
         for segment in self.holding_potentials:
-            if isinstance(segment, VariablePotential) or isinstance(segment, VariableTime):
+            if isinstance(segment, VariablePotential):
                 nfunc = len(segment.get_voltage_time_data()[0])
+                break
+            elif isinstance(segment, VariableTime):
+                nfunc = len(segment.get_voltage_time_data()[0])
+                break
             else:
                 nfunc = 1
 
@@ -131,7 +163,6 @@ class ExperimentBuilderApp:
                     voltages[i][j+1] = segment.voltage
                     times[i][j+1] = times[i][j] + segment.time
 
-                # check zero also for variable
                 elif isinstance(segment, VariablePotential):
                     voltage_data, time_data = segment.get_voltage_time_data()
                     voltages[i][j+1] = voltage_data[i]
@@ -142,6 +173,9 @@ class ExperimentBuilderApp:
                     voltages[i][j+1] = voltage_data[i]
                     times[i][j+1] = times[i][j] + time_data[i]
 
+        self.times = times
+        self.voltages = voltages
+
         for i in range(nfunc):
             plt.step(times[i, :], voltages[i, :])
 
@@ -149,6 +183,25 @@ class ExperimentBuilderApp:
         plt.ylabel('Voltage (mV)')
         plt.grid(True)
         plt.show()
+
+    def export_experiment(self):
+        if self.times is None or self.voltages is None:
+            messagebox.showinfo("Error", "No data to export.")
+            return
+
+        # Get the file path from the user
+        file_path = tk.filedialog.asksaveasfilename(title="Export Experiment",
+                                                    filetypes=[("Pickle Files",
+                                                                "*.pkl")])
+        if file_path:
+            # Create a dictionary to save times and voltages arrays
+            data_dict = {"times": self.times, "voltages": self.voltages}
+
+            # Save the data to a pickle file
+            with open(file_path, "wb") as file:
+                pkl.dump(data_dict, file)
+
+            messagebox.showinfo("Success", "Experiment data has been exported to a pkl file.")
 
 
 class VariableInputDialog:
