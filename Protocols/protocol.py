@@ -1,8 +1,29 @@
 import tkinter as tk
 import tkinter.messagebox as messagebox
+from tkinter.filedialog import asksaveasfilename
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle as pkl
+import matplotlib as mpl
+
+
+mpl.rcParams['figure.dpi']=180
+mpl.rcParams['figure.titlesize']=20
+mpl.rcParams['axes.facecolor']='white'
+mpl.rcParams['lines.linewidth']=2.0
+mpl.rcParams['axes.linewidth']=2.0
+mpl.rcParams['xtick.major.pad']=8
+mpl.rcParams['ytick.major.pad']=8
+mpl.rcParams['ytick.minor.pad']=6
+mpl.rcParams['xtick.labelsize']=10
+mpl.rcParams['ytick.labelsize']=10
+mpl.rcParams['axes.titlesize']=14
+mpl.rcParams['axes.labelsize']=14
+mpl.rc('text',usetex=False)
+mpl.rcParams['axes.grid']='True'
+mpl.rcParams['axes.axisbelow']='line'
+mpl.rcParams['legend.loc']='best'
+mpl.rcParams['legend.fontsize']=12
 
 
 class HoldingPotential:
@@ -190,9 +211,9 @@ class ExperimentBuilderApp:
             return
 
         # Get the file path from the user
-        file_path = tk.filedialog.asksaveasfilename(title="Export Experiment",
-                                                    filetypes=[("Pickle Files",
-                                                                "*.pkl")])
+        file_path = asksaveasfilename(title="Export Experiment",
+                                      filetypes=[("Pickle Files",
+                                                  "*.pkl")])
         if file_path:
             # Create a dictionary to save times and voltages arrays
             data_dict = {"times": self.times, "voltages": self.voltages}
@@ -201,7 +222,8 @@ class ExperimentBuilderApp:
             with open(file_path, "wb") as file:
                 pkl.dump(data_dict, file)
 
-            messagebox.showinfo("Success", "Experiment data has been exported to a pkl file.")
+            messagebox.showinfo("Success", "Experiment protocol has been"
+                                           "exported to file.")
 
 
 class VariableInputDialog:
