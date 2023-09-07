@@ -1,6 +1,6 @@
 import tkinter as tk
 from MM.MMgui import MMeditor  # Import the Markov Model Editor GUI module
-from MM.MMgui import MarkovModel
+from Protocols.gui import ExperimentBuilderApp
 
 
 class MainApp(tk.Tk):
@@ -17,10 +17,19 @@ class MainApp(tk.Tk):
                                               command=self.open_MMeditor)
         self.open_MMeditor_button.pack()
 
+        self.open_experiment_builder_button = tk.Button(self,
+                                                        text="Open Experiment Builder",
+                                                        command=self.open_experiment_builder)
+        self.open_experiment_builder_button.pack()
+
     def open_MMeditor(self):
         # Create a Toplevel window for the Markov Model Editor
         editor_window = tk.Toplevel(self)
-        editor_app = MMeditor(editor_window)
+        MMeditor(editor_window)
+
+    def open_experiment_builder(self):
+        builder_window = tk.Toplevel(self)
+        ExperimentBuilderApp(builder_window)
 
 
 if __name__ == "__main__":

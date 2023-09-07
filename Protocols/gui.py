@@ -7,23 +7,23 @@ import pickle as pkl
 import matplotlib as mpl
 
 
-mpl.rcParams['figure.dpi']=180
-mpl.rcParams['figure.titlesize']=20
-mpl.rcParams['axes.facecolor']='white'
-mpl.rcParams['lines.linewidth']=2.0
-mpl.rcParams['axes.linewidth']=2.0
-mpl.rcParams['xtick.major.pad']=8
-mpl.rcParams['ytick.major.pad']=8
-mpl.rcParams['ytick.minor.pad']=6
-mpl.rcParams['xtick.labelsize']=10
-mpl.rcParams['ytick.labelsize']=10
-mpl.rcParams['axes.titlesize']=14
-mpl.rcParams['axes.labelsize']=14
-mpl.rc('text',usetex=False)
-mpl.rcParams['axes.grid']='True'
-mpl.rcParams['axes.axisbelow']='line'
-mpl.rcParams['legend.loc']='best'
-mpl.rcParams['legend.fontsize']=12
+mpl.rcParams['figure.dpi'] = 180
+mpl.rcParams['figure.titlesize'] = 20
+mpl.rcParams['axes.facecolor'] = 'white'
+mpl.rcParams['lines.linewidth'] = 2.0
+mpl.rcParams['axes.linewidth'] = 2.0
+mpl.rcParams['xtick.major.pad'] = 8
+mpl.rcParams['ytick.major.pad'] = 8
+mpl.rcParams['ytick.minor.pad'] = 6
+mpl.rcParams['xtick.labelsize'] = 10
+mpl.rcParams['ytick.labelsize'] = 10
+mpl.rcParams['axes.titlesize'] = 14
+mpl.rcParams['axes.labelsize'] = 14
+mpl.rc('text', usetex=False)
+mpl.rcParams['axes.grid'] = 'True'
+mpl.rcParams['axes.axisbelow'] = 'line'
+mpl.rcParams['legend.loc'] = 'best'
+mpl.rcParams['legend.fontsize'] = 12
 
 
 class HoldingPotential:
