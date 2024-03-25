@@ -26,7 +26,7 @@ class DataLoader:
 
         # Export Button
         self.export_button = tk.Button(parent,
-                                     text="Export Data",
+                                     text="Export Data to be fit",
                                      command=self.export_data, 
                                      state='disabled')
         self.export_button.pack(pady=10)
