@@ -1,0 +1,13 @@
+[project]
+name = "pychannelab"
+version = "0.2.0"
+description = "Ion channel Markov State Model fitting — Streamlit GUI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "streamlit>=1.35",
+    "plotly>=5.20",
+]
