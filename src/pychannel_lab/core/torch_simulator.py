@@ -44,12 +44,7 @@ def preferred_dtype(device: torch.device) -> torch.dtype:
     return torch.float64
 
 
-# ---------------------------------------------------------------------------
-# Q-matrix builders
-# ---------------------------------------------------------------------------
-
 # Topology of the hardcoded 11-state model.
-# Each (fr, to) means a unidirectional transition from state fr to state to.
 # Order must match the `rates` vector in build_Q_11state().
 _TRANSITIONS_11 = [
     (0, 1), (1, 0),    # C0 ↔ C1
@@ -68,7 +63,7 @@ _TRANSITIONS_11 = [
     (4, 10), (10, 4),  # C4 ↔ O
 ]
 
-_BASIS_11: Optional[torch.Tensor] = None  # lazily initialised
+_BASIS_11: Optional[torch.Tensor] = None  
 
 
 def _get_basis_11() -> torch.Tensor:
@@ -176,18 +171,14 @@ def build_Q_dynamic(
 
     rate_list = []
     for tr in msm_def.transitions:
-        r = eval(tr.rate_expr, ns)  # noqa: S307 — intentional, scientific tool
+        r = eval(tr.rate_expr, ns) 
         if not isinstance(r, torch.Tensor):
             r = torch.tensor(float(r), device=device, dtype=dtype)
         rate_list.append(r)
 
-    rates = torch.stack(rate_list)
+    rates = torch.stack(rate_list) #vectorize the list of rates
     return torch.einsum("t,tij->ij", rates, basis.to(device=device))
 
-
-# ---------------------------------------------------------------------------
-# Protocol simulator
-# ---------------------------------------------------------------------------
 
 class TorchProtocolSimulator:
     """
@@ -250,10 +241,6 @@ class TorchProtocolSimulator:
         self.csi_proto   = CSInactivationProtocol(csi_cfg)
         self.rec_proto   = RecoveryProtocol(rec_cfg)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _Q(self, V: float) -> torch.Tensor:
         if self.msm_def is None:
             return build_Q_11state(self.params, V)
@@ -295,10 +282,6 @@ class TorchProtocolSimulator:
 
     def _open_prob(self, P: torch.Tensor) -> torch.Tensor:
         return P[self._open_idx].sum()
-
-    # ------------------------------------------------------------------
-    # Protocol runners
-    # ------------------------------------------------------------------
 
     def run_activation(self, test_voltages=None) -> torch.Tensor:
         proto = self.act_proto

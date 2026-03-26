@@ -9,7 +9,7 @@ Strategy
 Bounds are enforced via a sigmoid (logistic) transform on unconstrained raw
 parameters, so the optimisation is unconstrained in raw space:
 
-    param = lb + (ub − lb) × sigmoid(raw)
+    param = lb + (ub - lb) * sigmoid(raw)
 
 This is fully differentiable and avoids projection / clamping hacks.
 """
@@ -28,10 +28,6 @@ from core.torch_simulator import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Lightweight result object (mimics scipy OptimizeResult)
-# ---------------------------------------------------------------------------
-
 class OptimizeResult:
     """Attribute- and dict-style access to optimisation results."""
 
@@ -48,10 +44,6 @@ class OptimizeResult:
         return (f"OptimizeResult(fun={self.fun:.6g}, nit={self.nit}, "
                 f"success={self.success})")
 
-
-# ---------------------------------------------------------------------------
-# Cost function
-# ---------------------------------------------------------------------------
 
 class TorchCostFunction:
     """
@@ -147,10 +139,6 @@ class TorchCostFunction:
 
         return loss
 
-    # ------------------------------------------------------------------
-    # Numpy-friendly helpers for reporting
-    # ------------------------------------------------------------------
-
     def total_cost_numpy(self, params_np: np.ndarray) -> float:
         params = torch.tensor(params_np, dtype=self.dtype, device=self.device)
         with torch.no_grad():
@@ -190,10 +178,6 @@ class TorchCostFunction:
         return costs
 
 
-# ---------------------------------------------------------------------------
-# Optimiser
-# ---------------------------------------------------------------------------
-
 class TorchParameterOptimizer:
     """
     Adam (warm-up) → L-BFGS (refinement) optimiser.
@@ -208,8 +192,6 @@ class TorchParameterOptimizer:
     def __init__(self, cost_function: TorchCostFunction):
         self.cost = cost_function
 
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _to_raw(
         params_np: np.ndarray,
@@ -223,8 +205,6 @@ class TorchParameterOptimizer:
     @staticmethod
     def _from_raw(raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor) -> torch.Tensor:
         return lb + (ub - lb) * torch.sigmoid(raw)
-
-    # ------------------------------------------------------------------
 
     def optimize(
         self,
@@ -267,7 +247,6 @@ class TorchParameterOptimizer:
 
         total_iters = [0]
 
-        # ---- Adam phase ------------------------------------------------
         if n_adam > 0:
             adam = torch.optim.Adam([raw], lr=adam_lr)
             for i in range(n_adam):
@@ -279,7 +258,6 @@ class TorchParameterOptimizer:
                 if progress_callback and (i % 10 == 0 or i == n_adam - 1):
                     progress_callback(total_iters[0], loss.detach().item(), None)
 
-        # ---- L-BFGS phase ----------------------------------------------
         if n_lbfgs > 0:
             lbfgs = torch.optim.LBFGS(
                 [raw],
@@ -304,7 +282,6 @@ class TorchParameterOptimizer:
                 if progress_callback and (outer % 5 == 0 or outer == n_lbfgs - 1):
                     progress_callback(total_iters[0], last_loss[0], None)
 
-        # ---- Finalise --------------------------------------------------
         final_params = get_params().detach().cpu().numpy()
         final_cost   = self.cost.total_cost_numpy(final_params)
 
@@ -314,8 +291,6 @@ class TorchParameterOptimizer:
             nit     = total_iters[0],
             success = True,
         )
-
-    # ------------------------------------------------------------------
 
     def cost_breakdown(self, params_np: np.ndarray) -> dict:
         ind = self.cost.individual_costs_numpy(params_np)
