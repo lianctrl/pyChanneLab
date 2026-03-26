@@ -34,6 +34,19 @@ from core.simulator import ProtocolSimulator
 from core.optimizer import CostFunction, ParameterOptimizer
 from core.data_loader import load_from_bytes
 
+# PyTorch back-end (optional — graceful fallback if not installed)
+try:
+    import torch
+    from core.torch_simulator import get_device, preferred_dtype
+    from core.torch_optimizer import TorchCostFunction, TorchParameterOptimizer
+    _TORCH_AVAILABLE = True
+    _torch_device    = get_device()
+    _torch_dtype     = preferred_dtype(_torch_device)
+except ImportError:
+    _TORCH_AVAILABLE = False
+    _torch_device    = None
+    _torch_dtype     = None
+
 # ============================================================================
 # Page config
 # ============================================================================
@@ -99,8 +112,8 @@ PROTOCOL_LABELS = {
 PROTOCOL_X_LABELS = {
     "activation":      "Test Voltage (mV)",
     "inactivation":    "Conditioning Voltage (mV)",
-    "cs_inactivation": "Prepulse Duration (s)",
-    "recovery":        "Recovery Interval (s)",
+    "cs_inactivation": "Prepulse Duration (ms)",
+    "recovery":        "Recovery Interval (ms)",
 }
 PROTOCOL_Y_LABELS = {
     "activation":      "g / g_max",
@@ -131,11 +144,16 @@ def _build_cost() -> CostFunction:
 
 def _simulate_all(params: np.ndarray) -> dict:
     sim = _build_sim(params)
+    csi_times_s = sim.csi_proto.get_test_times()
+    rec_times_s = sim.rec_proto.get_test_times()
+    # Convert simulator absolute-seconds → ms durations/intervals for display
+    csi_x_ms = (csi_times_s - ss.csi_cfg.t_initial) * 1000.0
+    rec_x_ms = (rec_times_s - ss.rec_cfg.t_pulse) * 1000.0
     return {
-        "activation":      (sim.act_proto.get_test_voltages(),  sim.run_activation()),
-        "inactivation":    (sim.inact_proto.get_test_voltages(), sim.run_inactivation()),
-        "cs_inactivation": (sim.csi_proto.get_test_times(),     sim.run_cs_inactivation()),
-        "recovery":        (sim.rec_proto.get_test_times(),      sim.run_recovery()),
+        "activation":      (sim.act_proto.get_test_voltages(),   sim.run_activation()),
+        "inactivation":    (sim.inact_proto.get_test_voltages(),  sim.run_inactivation()),
+        "cs_inactivation": (csi_x_ms, sim.run_cs_inactivation()),
+        "recovery":        (rec_x_ms, sim.run_recovery()),
     }
 
 # ============================================================================
@@ -401,7 +419,7 @@ with tab_builder:
         )
         edited_states = st.data_editor(
             states_df,
-            use_container_width=True,
+            width='stretch',
             num_rows="dynamic",
             column_config={
                 "name": st.column_config.TextColumn("Name", required=True),
@@ -424,7 +442,7 @@ with tab_builder:
         ])
         edited_trans = st.data_editor(
             trans_df,
-            use_container_width=True,
+            width='stretch',
             num_rows="dynamic",
             column_config={
                 "from":      st.column_config.TextColumn("From", required=True),
@@ -446,7 +464,7 @@ with tab_builder:
         ])
         edited_params = st.data_editor(
             params_df,
-            use_container_width=True,
+            width='stretch',
             num_rows="dynamic",
             column_config={
                 "name":    st.column_config.TextColumn("Name",          required=True),
@@ -536,7 +554,7 @@ with tab_builder:
         for e in errors_now:
             st.error(e)
     else:
-        st.plotly_chart(_network_figure(ss.msm_def), use_container_width=True)
+        st.plotly_chart(_network_figure(ss.msm_def), width='stretch')
 
         n_s = ss.msm_def.n_states
         n_t = len(ss.msm_def.transitions)
@@ -567,7 +585,7 @@ with tab_proto:
         c.v_step = col3.number_input("V_step (mV)",  value=float(c.v_step),  step=1.0, key="a_vstep",  min_value=0.5)
         c.t_hold = col1.number_input("t_hold (s)",   value=float(c.t_hold),  step=0.05, key="a_thold", min_value=0.0)
         c.t_test = col2.number_input("t_test (s)",   value=float(c.t_test),  step=0.005,key="a_ttest", min_value=0.001)
-        st.plotly_chart(_voltage_preview("activation"), use_container_width=True)
+        st.plotly_chart(_voltage_preview("activation"), width='stretch')
 
     with proto_subtabs[1]:
         c = ss.inact_cfg
@@ -579,7 +597,7 @@ with tab_proto:
         c.v_step = col3.number_input("V_step (mV)",     value=float(c.v_step), step=1.0, key="i_vstep", min_value=0.5)
         c.t_hold = col1.number_input("t_hold (s)",      value=float(c.t_hold), step=0.05, key="i_thold", min_value=0.0)
         c.t_cond = col2.number_input("t_cond (s)",      value=float(c.t_cond), step=0.1,  key="i_tcond", min_value=0.01)
-        st.plotly_chart(_voltage_preview("inactivation"), use_container_width=True)
+        st.plotly_chart(_voltage_preview("inactivation"), width='stretch')
 
     with proto_subtabs[2]:
         c = ss.csi_cfg
@@ -592,7 +610,7 @@ with tab_proto:
         c.max_pulse      = col3.number_input("Max prepulse (s)", value=float(c.max_pulse),      step=0.01, key="csi_mx")
         c.pulse_increment= col1.number_input("Pulse step (s)",   value=float(c.pulse_increment),step=0.005,key="csi_pi", min_value=0.001)
         c.t_test_end     = col2.number_input("t_test_end (s)",   value=float(c.t_test_end),     step=0.05, key="csi_te")
-        st.plotly_chart(_voltage_preview("cs_inactivation"), use_container_width=True)
+        st.plotly_chart(_voltage_preview("cs_inactivation"), width='stretch')
 
     with proto_subtabs[3]:
         c = ss.rec_cfg
@@ -605,7 +623,7 @@ with tab_proto:
         c.max_interval      = col2.number_input("Max interval (s)",     value=float(c.max_interval),      step=0.01, key="rec_mx")
         c.interval_increment= col3.number_input("Interval step (s)",    value=float(c.interval_increment),step=0.005,key="rec_ii",  min_value=0.001)
         c.t_end             = col1.number_input("t_end (s)",            value=float(c.t_end),             step=0.05, key="rec_te")
-        st.plotly_chart(_voltage_preview("recovery"), use_container_width=True)
+        st.plotly_chart(_voltage_preview("recovery"), width='stretch')
 
 # ============================================================================
 # TAB 3 — Experimental Data
@@ -643,7 +661,7 @@ with tab_data:
                     yaxis_title=PROTOCOL_Y_LABELS[pk],
                     height=260, margin=dict(t=10, b=40, l=60, r=20),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
                 if st.button(f"Remove {PROTOCOL_LABELS[pk]} data", key=f"rm_{pk}"):
                     del ss.exp_data[pk]
                     st.rerun()
@@ -668,18 +686,44 @@ with tab_opt:
     else:
         st.subheader("Optimisation settings")
 
+        _SCIPY_METHODS = [
+            "Global (Diff. Evolution)",
+            "Local (L-BFGS-B)",
+            "Global then Local",
+        ]
+        _TORCH_LABEL = "PyTorch (Adam → L-BFGS)"
+        _method_options = _SCIPY_METHODS + ([_TORCH_LABEL] if _TORCH_AVAILABLE else [])
+
         col1, col2, col3 = st.columns(3)
-        method  = col1.selectbox("Method",
-                                 ["Global (Diff. Evolution)",
-                                  "Local (L-BFGS-B)",
-                                  "Global then Local"],
-                                 key="opt_method")
-        maxiter = col2.number_input("Max iterations", value=5000,
-                                    min_value=10, max_value=50000, step=100,
-                                    key="opt_maxiter")
-        workers = col3.number_input("Workers (-1 = all cores)", value=-1,
-                                    min_value=-1, max_value=64, step=1,
-                                    key="opt_workers")
+        method = col1.selectbox("Method", _method_options, key="opt_method")
+
+        use_torch = (method == _TORCH_LABEL)
+
+        if use_torch:
+            # ---- PyTorch-specific settings ----
+            _dev_name = str(_torch_device) if _torch_device else "cpu"
+            col1.caption(f"Device: **{_dev_name}**")
+            maxiter = col2.number_input("Adam steps", value=500,
+                                        min_value=0, max_value=10000, step=50,
+                                        key="opt_maxiter")
+            n_lbfgs = col3.number_input("L-BFGS steps", value=200,
+                                        min_value=0, max_value=2000, step=20,
+                                        key="opt_lbfgs")
+            col_lr, col_peaks = st.columns(2)
+            adam_lr     = col_lr.number_input("Adam learning rate", value=0.05,
+                                              min_value=1e-4, max_value=1.0,
+                                              format="%.4f", key="opt_adam_lr")
+            n_peak_steps = col_peaks.number_input("Peak-detection substeps", value=50,
+                                                   min_value=10, max_value=200, step=10,
+                                                   key="opt_peak_steps")
+        else:
+            # ---- Scipy-specific settings ----
+            maxiter = col2.number_input("Max iterations", value=5000,
+                                        min_value=10, max_value=50000, step=100,
+                                        key="opt_maxiter")
+            workers = col3.number_input("Workers (-1 = all cores)", value=-1,
+                                        min_value=-1, max_value=64, step=1,
+                                        key="opt_workers")
 
         st.subheader("Protocol weights")
         wc = st.columns(4)
@@ -691,22 +735,106 @@ with tab_opt:
         st.divider()
 
         if st.button("Run Optimisation", type="primary", key="run_opt"):
-            defn      = ss.msm_def
-            cost_fn   = _build_cost()
-            optimizer = ParameterOptimizer(cost_fn)
-            bounds    = list(defn.bounds)
-
-            ss.opt_costs_initial = optimizer.cost_breakdown(defn.initial_guess)
+            defn   = ss.msm_def
+            bounds = list(defn.bounds)
             log: list = []
 
+            # --- Expected total iterations (for progress bar) ---
+            if use_torch:
+                _total_iters = int(maxiter) + int(n_lbfgs)
+            elif "Global then Local" in method:
+                _total_iters = int(maxiter) * 2   # rough estimate
+            else:
+                _total_iters = int(maxiter)
+
+            # --- Live progress widgets (updated in-place via st.empty) ---
+            _prog = st.progress(0.0, text="Starting…")
+            _mc1, _mc2, _mc3 = st.columns(3)
+            _m_iter  = _mc1.empty()
+            _m_cost  = _mc2.empty()
+            _m_phase = _mc3.empty()
+            _chart   = st.empty()
+
+            _cost_hist   = []   # list of log10(cost) values, one per callback
+            _global_iter = [0]  # monotonic counter across phase switches
+
             def _cb(iteration, cost, convergence):
-                msg = f"Iter {iteration:5d} | cost = {cost:.6f}"
+                _global_iter[0] += 1
+                g = _global_iter[0]
+
+                msg = f"Iter {g:5d} | cost = {cost:.6e}"
                 if convergence is not None:
-                    msg += f" | convergence = {convergence:.4f}"
+                    msg += f" | conv = {convergence:.4f}"
                 log.append(msg)
 
+                # Phase label
+                if use_torch:
+                    phase = "Adam" if iteration <= int(maxiter) else "L-BFGS"
+                elif convergence is not None:
+                    phase = "Global (DE)"
+                else:
+                    phase = "Local (L-BFGS-B)"
+
+                # Progress bar
+                pct = min(g / max(_total_iters, 1), 1.0)
+                _prog.progress(pct, text=f"{phase}  ·  iter {g} / {_total_iters}")
+
+                # Metric cards
+                _m_iter.metric("Iteration", f"{g:,}")
+                _m_cost.metric("Cost", f"{cost:.4e}")
+                _m_phase.metric("Phase", phase)
+
+                # Live log₁₀(cost) chart (update every 5 callbacks)
+                _cost_hist.append(math.log10(max(cost, 1e-15)))
+                if len(_cost_hist) == 1 or len(_cost_hist) % 5 == 0:
+                    _chart.line_chart(
+                        pd.DataFrame(
+                            {"log₁₀(cost)": _cost_hist},
+                            index=range(1, len(_cost_hist) + 1),
+                        ),
+                        height=200,
+                        x_label="callback #",
+                        y_label="log₁₀(cost)",
+                    )
+
             result = None
-            with st.spinner("Optimisation running — this may take several minutes…"):
+
+            if use_torch:
+                # ---- PyTorch path ----------------------------------------
+                torch_cost = TorchCostFunction(
+                    ss.exp_data,
+                    weights      = ss.opt_weights,
+                    msm_def      = defn,
+                    act_cfg      = ss.act_cfg,
+                    inact_cfg    = ss.inact_cfg,
+                    csi_cfg      = ss.csi_cfg,
+                    rec_cfg      = ss.rec_cfg,
+                    g_k_max      = ss.g_k_max,
+                    t_total      = ss.t_total,
+                    n_peak_steps = int(n_peak_steps),
+                    device       = _torch_device,
+                    dtype        = _torch_dtype,
+                )
+                torch_opt = TorchParameterOptimizer(torch_cost)
+                ss.opt_costs_initial = torch_opt.cost_breakdown(defn.initial_guess)
+
+                result = torch_opt.optimize(
+                    initial_guess     = defn.initial_guess,
+                    bounds            = bounds,
+                    n_adam            = int(maxiter),
+                    adam_lr           = float(adam_lr),
+                    n_lbfgs           = int(n_lbfgs),
+                    progress_callback = _cb,
+                )
+
+                ss.opt_costs_final = torch_opt.cost_breakdown(result.x)
+
+            else:
+                # ---- Scipy path ------------------------------------------
+                cost_fn   = _build_cost()
+                optimizer = ParameterOptimizer(cost_fn)
+                ss.opt_costs_initial = optimizer.cost_breakdown(defn.initial_guess)
+
                 if "Global" in method:
                     result = optimizer.optimize_global(
                         bounds=bounds, maxiter=int(maxiter), workers=int(workers),
@@ -715,17 +843,23 @@ with tab_opt:
                     if "then Local" in method:
                         log.append("--- Switching to local refinement ---")
                         result = optimizer.optimize_local(
-                            initial_guess=result.x, bounds=bounds, progress_callback=_cb,
+                            initial_guess=result.x, bounds=bounds,
+                            progress_callback=_cb,
                         )
                 else:
                     result = optimizer.optimize_local(
-                        initial_guess=defn.initial_guess, bounds=bounds, progress_callback=_cb,
+                        initial_guess=defn.initial_guess, bounds=bounds,
+                        progress_callback=_cb,
                     )
 
-            ss.fitted_params   = result.x
-            ss.opt_result      = result
-            ss.opt_log         = log
-            ss.opt_costs_final = optimizer.cost_breakdown(result.x)
+                ss.opt_costs_final = optimizer.cost_breakdown(result.x)
+
+            # Mark complete
+            _prog.progress(1.0, text="Done")
+
+            ss.fitted_params = result.x
+            ss.opt_result    = result
+            ss.opt_log       = log
             st.success(f"Done! Final cost: {result.fun:.6f}")
 
         if ss.opt_result is not None:
@@ -742,7 +876,7 @@ with tab_opt:
                     imp = (ci - cf) / ci * 100 if ci else float("nan")
                     rows.append({"Protocol": pk, "Initial": f"{ci:.6f}",
                                  "Final": f"{cf:.6f}", "Improvement (%)": f"{imp:.1f}"})
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
             if ss.opt_log:
                 with st.expander("Optimisation log (last 200 iterations)"):
@@ -774,7 +908,7 @@ with tab_results:
                     "Change (%)": round(chg, 2),
                     "Bounds":   f"[{pspec.lower_bound}, {pspec.upper_bound}]",
                 })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_dict = {
@@ -800,4 +934,4 @@ with tab_results:
         st.subheader(f"Experimental vs Simulated  ({label} parameters)")
         with st.spinner("Simulating…"):
             fig = _comparison_figure(params)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')

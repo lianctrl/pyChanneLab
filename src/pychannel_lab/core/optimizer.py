@@ -100,11 +100,15 @@ class CostFunction:
 
         if "cs_inactivation" in active:
             x, y, _ = active["cs_inactivation"]
-            costs["cs_inactivation"] = self._mse(sim.run_cs_inactivation(x), y)
+            csi_cfg = self._csi_cfg or CSInactivationConfig()
+            x_sim = csi_cfg.t_initial + np.asarray(x) / 1000.0
+            costs["cs_inactivation"] = self._mse(sim.run_cs_inactivation(x_sim), y)
 
         if "recovery" in active:
             x, y, _ = active["recovery"]
-            costs["recovery"] = self._mse(sim.run_recovery(x), y)
+            rec_cfg = self._rec_cfg or RecoveryConfig()
+            x_sim = rec_cfg.t_pulse + np.asarray(x) / 1000.0
+            costs["recovery"] = self._mse(sim.run_recovery(x_sim), y)
 
         return costs
 
