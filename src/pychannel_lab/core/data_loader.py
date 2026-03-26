@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 
-def load_csv(filepath: str | Path) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+def load_csv(
+    filepath: str | Path,
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
     Load a two- or three-column CSV file.
 
@@ -28,9 +30,12 @@ def load_csv(filepath: str | Path) -> Tuple[np.ndarray, np.ndarray, Optional[np.
     return x, y, y_err
 
 
-def load_from_bytes(content: bytes, filename: str = "") -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+def load_from_bytes(
+    content: bytes, filename: str = ""
+) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load from raw bytes (e.g. Streamlit UploadedFile.read())."""
     import io
+
     df = pd.read_csv(io.BytesIO(content), header=0)
     if df.shape[1] < 2:
         raise ValueError(f"CSV must have at least 2 columns, got {df.shape[1]}")

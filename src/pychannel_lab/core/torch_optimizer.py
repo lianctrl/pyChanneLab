@@ -19,12 +19,17 @@ import torch
 from typing import Callable, Optional
 
 from core.config import (
-    ActivationConfig, InactivationConfig,
-    CSInactivationConfig, RecoveryConfig,
-    G_K_MAX, TIME_PARAMS,
+    ActivationConfig,
+    InactivationConfig,
+    CSInactivationConfig,
+    RecoveryConfig,
+    G_K_MAX,
+    TIME_PARAMS,
 )
 from core.torch_simulator import (
-    TorchProtocolSimulator, get_device, preferred_dtype,
+    TorchProtocolSimulator,
+    get_device,
+    preferred_dtype,
 )
 
 
@@ -32,17 +37,19 @@ class OptimizeResult:
     """Attribute- and dict-style access to optimisation results."""
 
     def __init__(self, x, fun, nit, success=True):
-        self.x       = x        # np.ndarray — best parameters
-        self.fun     = fun      # float — best cost
-        self.nit     = nit      # int  — total iterations
+        self.x = x  # np.ndarray — best parameters
+        self.fun = fun  # float — best cost
+        self.nit = nit  # int  — total iterations
         self.success = success
 
     def get(self, key, default=None):
         return getattr(self, key, default)
 
     def __repr__(self):
-        return (f"OptimizeResult(fun={self.fun:.6g}, nit={self.nit}, "
-                f"success={self.success})")
+        return (
+            f"OptimizeResult(fun={self.fun:.6g}, nit={self.nit}, "
+            f"success={self.success})"
+        )
 
 
 class TorchCostFunction:
@@ -54,88 +61,91 @@ class TorchCostFunction:
     """
 
     _DEFAULT_WEIGHTS = {
-        "activation":      1.0,
-        "inactivation":    1.0,
+        "activation": 1.0,
+        "inactivation": 1.0,
         "cs_inactivation": 2.0,
-        "recovery":        2.0,
+        "recovery": 2.0,
     }
 
     def __init__(
         self,
         experimental_data: dict,
-        weights:   dict                 = None,
-        msm_def                         = None,
-        act_cfg:   ActivationConfig     = None,
-        inact_cfg: InactivationConfig   = None,
-        csi_cfg:   CSInactivationConfig = None,
-        rec_cfg:   RecoveryConfig       = None,
-        g_k_max:   float                = G_K_MAX,
-        t_total:   float                = TIME_PARAMS["tend"],
-        n_peak_steps: int               = 50,
-        device:    torch.device         = None,
-        dtype:     torch.dtype          = None,
+        weights: dict = None,
+        msm_def=None,
+        act_cfg: ActivationConfig = None,
+        inact_cfg: InactivationConfig = None,
+        csi_cfg: CSInactivationConfig = None,
+        rec_cfg: RecoveryConfig = None,
+        g_k_max: float = G_K_MAX,
+        t_total: float = TIME_PARAMS["tend"],
+        n_peak_steps: int = 50,
+        device: torch.device = None,
+        dtype: torch.dtype = None,
     ):
-        self.exp          = experimental_data
-        self.w            = weights or self._DEFAULT_WEIGHTS
-        self._msm_def     = msm_def
-        self._act_cfg     = act_cfg
-        self._inact_cfg   = inact_cfg
-        self._csi_cfg     = csi_cfg
-        self._rec_cfg     = rec_cfg
-        self._g_k_max     = g_k_max
-        self._t_total     = t_total
+        self.exp = experimental_data
+        self.w = weights or self._DEFAULT_WEIGHTS
+        self._msm_def = msm_def
+        self._act_cfg = act_cfg
+        self._inact_cfg = inact_cfg
+        self._csi_cfg = csi_cfg
+        self._rec_cfg = rec_cfg
+        self._g_k_max = g_k_max
+        self._t_total = t_total
         self._n_peak_steps = n_peak_steps
-        self.device       = device or get_device()
-        self.dtype        = dtype or preferred_dtype(self.device)
-
-    # ------------------------------------------------------------------
+        self.device = device or get_device()
+        self.dtype = dtype or preferred_dtype(self.device)
 
     def _build_sim(self, params: torch.Tensor) -> TorchProtocolSimulator:
         return TorchProtocolSimulator(
             params,
-            msm_def      = self._msm_def,
-            act_cfg      = self._act_cfg,
-            inact_cfg    = self._inact_cfg,
-            csi_cfg      = self._csi_cfg,
-            rec_cfg      = self._rec_cfg,
-            g_k_max      = self._g_k_max,
-            t_total      = self._t_total,
-            n_peak_steps = self._n_peak_steps,
+            msm_def=self._msm_def,
+            act_cfg=self._act_cfg,
+            inact_cfg=self._inact_cfg,
+            csi_cfg=self._csi_cfg,
+            rec_cfg=self._rec_cfg,
+            g_k_max=self._g_k_max,
+            t_total=self._t_total,
+            n_peak_steps=self._n_peak_steps,
         )
 
     def __call__(self, params: torch.Tensor) -> torch.Tensor:
         """Return weighted MSE as a differentiable scalar."""
-        sim    = self._build_sim(params)
-        loss   = params.new_zeros(())          # scalar, same device/dtype
+        sim = self._build_sim(params)
+        loss = params.new_zeros(())  # scalar, same device/dtype
         active = {k: v for k, v in self.exp.items() if v is not None}
 
         if "activation" in active:
             x, y, _ = active["activation"]
-            pred   = sim.run_activation(x)
+            pred = sim.run_activation(x)
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
-            loss   = loss + self.w.get("activation", 1.0) * ((pred - target) ** 2).mean()
+            loss = loss + self.w.get("activation", 1.0) * ((pred - target) ** 2).mean()
 
         if "inactivation" in active:
             x, y, _ = active["inactivation"]
-            pred   = sim.run_inactivation(x)
+            pred = sim.run_inactivation(x)
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
-            loss   = loss + self.w.get("inactivation", 1.0) * ((pred - target) ** 2).mean()
+            loss = (
+                loss + self.w.get("inactivation", 1.0) * ((pred - target) ** 2).mean()
+            )
 
         if "cs_inactivation" in active:
             x, y, _ = active["cs_inactivation"]
             _csi = self._csi_cfg or CSInactivationConfig()
             x_sim = _csi.t_initial + np.asarray(x) / 1000.0
-            pred   = sim.run_cs_inactivation(x_sim)
+            pred = sim.run_cs_inactivation(x_sim)
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
-            loss   = loss + self.w.get("cs_inactivation", 1.0) * ((pred - target) ** 2).mean()
+            loss = (
+                loss
+                + self.w.get("cs_inactivation", 1.0) * ((pred - target) ** 2).mean()
+            )
 
         if "recovery" in active:
             x, y, _ = active["recovery"]
             _rec = self._rec_cfg or RecoveryConfig()
             x_sim = _rec.t_pulse + np.asarray(x) / 1000.0
-            pred   = sim.run_recovery(x_sim)
+            pred = sim.run_recovery(x_sim)
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
-            loss   = loss + self.w.get("recovery", 1.0) * ((pred - target) ** 2).mean()
+            loss = loss + self.w.get("recovery", 1.0) * ((pred - target) ** 2).mean()
 
         return loss
 
@@ -146,11 +156,12 @@ class TorchCostFunction:
 
     def individual_costs_numpy(self, params_np: np.ndarray) -> dict:
         params = torch.tensor(params_np, dtype=self.dtype, device=self.device)
-        sim    = self._build_sim(params)
+        sim = self._build_sim(params)
         active = {k: v for k, v in self.exp.items() if v is not None}
-        costs  = {}
+        costs = {}
 
         with torch.no_grad():
+
             def _mse(pred, y_np):
                 t = torch.tensor(y_np, dtype=self.dtype, device=self.device)
                 return float(((pred - t) ** 2).mean())
@@ -203,16 +214,18 @@ class TorchParameterOptimizer:
         return torch.logit(normalized)
 
     @staticmethod
-    def _from_raw(raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor) -> torch.Tensor:
+    def _from_raw(
+        raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+    ) -> torch.Tensor:
         return lb + (ub - lb) * torch.sigmoid(raw)
 
     def optimize(
         self,
-        initial_guess:     np.ndarray,
-        bounds:            list,
-        n_adam:            int            = 500,
-        adam_lr:           float          = 0.05,
-        n_lbfgs:           int            = 200,
+        initial_guess: np.ndarray,
+        bounds: list,
+        n_adam: int = 500,
+        adam_lr: float = 0.05,
+        n_lbfgs: int = 200,
         progress_callback: Optional[Callable] = None,
     ) -> OptimizeResult:
         """
@@ -232,7 +245,7 @@ class TorchParameterOptimizer:
         OptimizeResult with .x, .fun, .nit
         """
         device = self.cost.device
-        dtype  = self.cost.dtype
+        dtype = self.cost.dtype
 
         lb = torch.tensor([b[0] for b in bounds], dtype=dtype, device=device)
         ub = torch.tensor([b[1] for b in bounds], dtype=dtype, device=device)
@@ -283,13 +296,13 @@ class TorchParameterOptimizer:
                     progress_callback(total_iters[0], last_loss[0], None)
 
         final_params = get_params().detach().cpu().numpy()
-        final_cost   = self.cost.total_cost_numpy(final_params)
+        final_cost = self.cost.total_cost_numpy(final_params)
 
         return OptimizeResult(
-            x       = final_params,
-            fun     = final_cost,
-            nit     = total_iters[0],
-            success = True,
+            x=final_params,
+            fun=final_cost,
+            nit=total_iters[0],
+            success=True,
         )
 
     def cost_breakdown(self, params_np: np.ndarray) -> dict:

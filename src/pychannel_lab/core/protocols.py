@@ -6,8 +6,10 @@ so the user can freely adjust timing and voltage parameters.
 import numpy as np
 from typing import Callable
 from core.config import (
-    ActivationConfig, InactivationConfig,
-    CSInactivationConfig, RecoveryConfig,
+    ActivationConfig,
+    InactivationConfig,
+    CSInactivationConfig,
+    RecoveryConfig,
 )
 
 
@@ -47,6 +49,7 @@ class ActivationProtocol:
                 return v_test
             else:
                 return v_tail
+
         return voltage
 
 
@@ -83,6 +86,7 @@ class InactivationProtocol:
                 return v_cond
             else:
                 return v_depo
+
         return voltage
 
 
@@ -103,8 +107,9 @@ class CSInactivationProtocol:
     def get_test_times(self) -> np.ndarray:
         """Absolute end-times of the prepulse (t_initial + prepulse_duration)."""
         c = self.cfg
-        durations = np.arange(c.min_pulse, c.max_pulse + c.pulse_increment,
-                              c.pulse_increment)
+        durations = np.arange(
+            c.min_pulse, c.max_pulse + c.pulse_increment, c.pulse_increment
+        )
         return c.t_initial + durations
 
     def get_voltage_function(self, t_pulse: float) -> Callable:
@@ -119,6 +124,7 @@ class CSInactivationProtocol:
                 return c.v_depo
             else:
                 return c.v_hold
+
         return voltage
 
 
@@ -140,8 +146,9 @@ class RecoveryProtocol:
     def get_test_times(self) -> np.ndarray:
         """Absolute start-times of the test pulse (t_pulse + interval)."""
         c = self.cfg
-        intervals = np.arange(c.min_interval, c.max_interval + c.interval_increment,
-                              c.interval_increment)
+        intervals = np.arange(
+            c.min_interval, c.max_interval + c.interval_increment, c.interval_increment
+        )
         return c.t_pulse + intervals
 
     def get_voltage_function(self, t_rec_end: float) -> Callable:
@@ -156,4 +163,5 @@ class RecoveryProtocol:
                 return c.v_hold
             else:
                 return c.v_depo
+
         return voltage

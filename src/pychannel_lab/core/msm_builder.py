@@ -33,22 +33,22 @@ import numpy as np
 
 from core.config import EXP_FACTOR
 
-
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class StateSpec:
     name: str
-    state_type: str   # "closed" | "inactivated" | "open"
+    state_type: str  # "closed" | "inactivated" | "open"
 
 
 @dataclass
 class TransitionSpec:
     from_state: str
     to_state: str
-    rate_expr: str    # evaluated Python expression
+    rate_expr: str  # evaluated Python expression
 
 
 @dataclass
@@ -62,9 +62,10 @@ class ParamSpec:
 @dataclass
 class MSMDefinition:
     """Complete, self-contained description of a Markov State Model."""
-    states:      list   = field(default_factory=list)   # list[StateSpec]
-    transitions: list   = field(default_factory=list)   # list[TransitionSpec]
-    parameters:  list   = field(default_factory=list)   # list[ParamSpec]
+
+    states: list = field(default_factory=list)  # list[StateSpec]
+    transitions: list = field(default_factory=list)  # list[TransitionSpec]
+    parameters: list = field(default_factory=list)  # list[ParamSpec]
 
     # ---- convenience ---------------------------------------------------
 
@@ -127,14 +128,13 @@ class MSMDefinition:
                 errors.append(f"Transition references unknown state '{tr.to_state}'.")
 
         # Evaluate every expression with dummy V=0 to catch syntax errors
-        test_ns = _build_namespace(V=0.0, param_names=self.param_names,
-                                   param_values=self.initial_guess)
+        test_ns = _build_namespace(
+            V=0.0, param_names=self.param_names, param_values=self.initial_guess
+        )
         for tr in self.transitions:
             ok, msg = _eval_expr(tr.rate_expr, test_ns)
             if not ok:
-                errors.append(
-                    f"Bad expression [{tr.from_state}→{tr.to_state}]: {msg}"
-                )
+                errors.append(f"Bad expression [{tr.from_state}→{tr.to_state}]: {msg}")
 
         return errors
 
@@ -142,14 +142,26 @@ class MSMDefinition:
 
     def to_dict(self) -> dict:
         return {
-            "states":      [{"name": s.name, "state_type": s.state_type}
-                            for s in self.states],
-            "transitions": [{"from_state": t.from_state, "to_state": t.to_state,
-                             "rate_expr": t.rate_expr}
-                            for t in self.transitions],
-            "parameters":  [{"name": p.name, "initial_value": p.initial_value,
-                             "lower_bound": p.lower_bound, "upper_bound": p.upper_bound}
-                            for p in self.parameters],
+            "states": [
+                {"name": s.name, "state_type": s.state_type} for s in self.states
+            ],
+            "transitions": [
+                {
+                    "from_state": t.from_state,
+                    "to_state": t.to_state,
+                    "rate_expr": t.rate_expr,
+                }
+                for t in self.transitions
+            ],
+            "parameters": [
+                {
+                    "name": p.name,
+                    "initial_value": p.initial_value,
+                    "lower_bound": p.lower_bound,
+                    "upper_bound": p.upper_bound,
+                }
+                for p in self.parameters
+            ],
         }
 
     def to_json(self) -> str:
@@ -158,9 +170,9 @@ class MSMDefinition:
     @classmethod
     def from_dict(cls, d: dict) -> "MSMDefinition":
         return cls(
-            states      = [StateSpec(**s)      for s in d.get("states", [])],
-            transitions = [TransitionSpec(**t) for t in d.get("transitions", [])],
-            parameters  = [ParamSpec(**p)      for p in d.get("parameters", [])],
+            states=[StateSpec(**s) for s in d.get("states", [])],
+            transitions=[TransitionSpec(**t) for t in d.get("transitions", [])],
+            parameters=[ParamSpec(**p) for p in d.get("parameters", [])],
         )
 
     @classmethod
@@ -172,15 +184,16 @@ class MSMDefinition:
 # Expression helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_namespace(V: float, param_names: list, param_values: np.ndarray) -> dict:
     ns = {
-        "V":          V,
+        "V": V,
         "EXP_FACTOR": EXP_FACTOR,
-        "exp":   math.exp,
-        "log":   math.log,
-        "sqrt":  math.sqrt,
-        "abs":   abs,
-        "pi":    math.pi,
+        "exp": math.exp,
+        "log": math.log,
+        "sqrt": math.sqrt,
+        "abs": abs,
+        "pi": math.pi,
         "__builtins__": {},
     }
     ns.update(dict(zip(param_names, param_values)))
@@ -204,6 +217,7 @@ def _eval_expr(expr: str, namespace: dict):
 # Dynamic ODE model built from an MSMDefinition
 # ---------------------------------------------------------------------------
 
+
 class DynamicModel:
     """
     Assembles ODE right-hand sides at run-time from an MSMDefinition.
@@ -213,7 +227,7 @@ class DynamicModel:
     """
 
     def __init__(self, definition: MSMDefinition, parameters: np.ndarray):
-        self.defn   = definition
+        self.defn = definition
         self.params = np.asarray(parameters, dtype=float)
 
         # Map state name → column index
@@ -233,12 +247,12 @@ class DynamicModel:
         )
 
     def equations(self, state, t: float, voltage_func: Callable) -> tuple:
-        V  = voltage_func(t)
+        V = voltage_func(t)
         ns = {**self._base_ns, "V": V}
 
         derivs = [0.0] * self.defn.n_states
-        for (i, j, expr) in self._transitions:
-            rate = eval(expr, ns)   # noqa: S307 — intentional, scientific tool
+        for i, j, expr in self._transitions:
+            rate = eval(expr, ns)  # noqa: S307 — intentional, scientific tool
             flux = rate * state[i]
             derivs[i] -= flux
             derivs[j] += flux
@@ -249,6 +263,7 @@ class DynamicModel:
 # ---------------------------------------------------------------------------
 # Layout helper for the network diagram
 # ---------------------------------------------------------------------------
+
 
 def compute_layout(definition: MSMDefinition) -> dict:
     """
@@ -272,10 +287,14 @@ def compute_layout(definition: MSMDefinition) -> dict:
     for i, name in enumerate(by_type["inactivated"]):
         layout[name] = (i * spacing, 0.0)
 
-    right_x = max(
-        len(by_type["closed"]) - 1,
-        len(by_type["inactivated"]) - 1,
-    ) * spacing + spacing
+    right_x = (
+        max(
+            len(by_type["closed"]) - 1,
+            len(by_type["inactivated"]) - 1,
+        )
+        * spacing
+        + spacing
+    )
 
     for i, name in enumerate(by_type["open"]):
         y = 1.0 + i * spacing
@@ -288,6 +307,7 @@ def compute_layout(definition: MSMDefinition) -> dict:
 # Built-in presets
 # ---------------------------------------------------------------------------
 
+
 def make_11state_preset() -> MSMDefinition:
     """
     The classic 11-state Kv channel model:
@@ -296,18 +316,22 @@ def make_11state_preset() -> MSMDefinition:
         I0 ↔ I1 ↔ I2 ↔ I3 ↔ I4
     """
     states = [
-        StateSpec("C0", "closed"), StateSpec("C1", "closed"),
-        StateSpec("C2", "closed"), StateSpec("C3", "closed"),
+        StateSpec("C0", "closed"),
+        StateSpec("C1", "closed"),
+        StateSpec("C2", "closed"),
+        StateSpec("C3", "closed"),
         StateSpec("C4", "closed"),
-        StateSpec("I0", "inactivated"), StateSpec("I1", "inactivated"),
-        StateSpec("I2", "inactivated"), StateSpec("I3", "inactivated"),
+        StateSpec("I0", "inactivated"),
+        StateSpec("I1", "inactivated"),
+        StateSpec("I2", "inactivated"),
+        StateSpec("I3", "inactivated"),
         StateSpec("I4", "inactivated"),
-        StateSpec("O",  "open"),
+        StateSpec("O", "open"),
     ]
 
     # Helper expressions
     _alpha = "alpha_0 * exp(alpha_1 * V * EXP_FACTOR)"
-    _beta  = "beta_0  * exp(-beta_1  * V * EXP_FACTOR)"
+    _beta = "beta_0  * exp(-beta_1  * V * EXP_FACTOR)"
 
     transitions = [
         # ---- C-ladder (horizontal) ----
@@ -319,7 +343,6 @@ def make_11state_preset() -> MSMDefinition:
         TransitionSpec("C3", "C2", f"3 * {_beta}"),
         TransitionSpec("C3", "C4", f"1 * {_alpha}"),
         TransitionSpec("C4", "C3", f"4 * {_beta}"),
-
         # ---- I-ladder (horizontal, scaled by f) ----
         TransitionSpec("I0", "I1", f"4 * {_alpha} / f"),
         TransitionSpec("I1", "I0", f"1 * {_beta}  * f"),
@@ -329,7 +352,6 @@ def make_11state_preset() -> MSMDefinition:
         TransitionSpec("I3", "I2", f"3 * {_beta}  * f"),
         TransitionSpec("I3", "I4", f"1 * {_alpha} / f"),
         TransitionSpec("I4", "I3", f"4 * {_beta}  * f"),
-
         # ---- C ↔ I vertical transitions ----
         TransitionSpec("C0", "I0", "k_CI * f**4"),
         TransitionSpec("I0", "C0", "k_IC / f**4"),
@@ -341,24 +363,23 @@ def make_11state_preset() -> MSMDefinition:
         TransitionSpec("I3", "C3", "k_IC / f"),
         TransitionSpec("C4", "I4", "k_CI"),
         TransitionSpec("I4", "C4", "k_IC"),
-
         # ---- C4 ↔ O ----
         TransitionSpec("C4", "O", "k_CO_0 * exp( k_CO_1 * V * EXP_FACTOR)"),
-        TransitionSpec("O",  "C4", "k_OC_0 * exp(-k_OC_1 * V * EXP_FACTOR)"),
+        TransitionSpec("O", "C4", "k_OC_0 * exp(-k_OC_1 * V * EXP_FACTOR)"),
     ]
 
     parameters = [
-        ParamSpec("alpha_0", 204.0,  0.0, 2000.0),
-        ParamSpec("alpha_1", 2.07,   0.0,    5.0),
-        ParamSpec("beta_0",  21.2,   0.0,  100.0),
-        ParamSpec("beta_1",  2.8e-3, 0.0,    5.0),
-        ParamSpec("k_CO_0",  2.8,    0.0, 1000.0),
-        ParamSpec("k_CO_1",  0.343,  0.0,    5.0),
-        ParamSpec("k_OC_0",  37.5,   0.0, 1000.0),
-        ParamSpec("k_OC_1",  1.0e-2, 0.0,    5.0),
-        ParamSpec("k_CI",    94.5,   0.0, 2000.0),
-        ParamSpec("k_IC",    0.24,   0.0,  100.0),
-        ParamSpec("f",       0.44,   0.0,    1.0),
+        ParamSpec("alpha_0", 204.0, 0.0, 2000.0),
+        ParamSpec("alpha_1", 2.07, 0.0, 5.0),
+        ParamSpec("beta_0", 21.2, 0.0, 100.0),
+        ParamSpec("beta_1", 2.8e-3, 0.0, 5.0),
+        ParamSpec("k_CO_0", 2.8, 0.0, 1000.0),
+        ParamSpec("k_CO_1", 0.343, 0.0, 5.0),
+        ParamSpec("k_OC_0", 37.5, 0.0, 1000.0),
+        ParamSpec("k_OC_1", 1.0e-2, 0.0, 5.0),
+        ParamSpec("k_CI", 94.5, 0.0, 2000.0),
+        ParamSpec("k_IC", 0.24, 0.0, 100.0),
+        ParamSpec("f", 0.44, 0.0, 1.0),
     ]
 
     return MSMDefinition(states=states, transitions=transitions, parameters=parameters)

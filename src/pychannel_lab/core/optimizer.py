@@ -9,8 +9,10 @@ from scipy.optimize import differential_evolution, minimize
 from typing import Dict, Callable, Tuple
 
 from core.config import (
-    ActivationConfig, InactivationConfig,
-    CSInactivationConfig, RecoveryConfig,
+    ActivationConfig,
+    InactivationConfig,
+    CSInactivationConfig,
+    RecoveryConfig,
 )
 from core.simulator import ProtocolSimulator
 
@@ -33,43 +35,45 @@ class CostFunction:
     """
 
     _DEFAULT_WEIGHTS = {
-        "activation":     1.0,
-        "inactivation":   1.0,
+        "activation": 1.0,
+        "inactivation": 1.0,
         "cs_inactivation": 2.0,
-        "recovery":       2.0,
+        "recovery": 2.0,
     }
 
     def __init__(
         self,
         experimental_data: dict,
         weights: dict = None,
-        msm_def = None,
-        act_cfg:   ActivationConfig      = None,
-        inact_cfg: InactivationConfig    = None,
-        csi_cfg:   CSInactivationConfig  = None,
-        rec_cfg:   RecoveryConfig        = None,
-        g_k_max:   float = None,
-        t_total:   float = None,
-        dt:        float = None,
+        msm_def=None,
+        act_cfg: ActivationConfig = None,
+        inact_cfg: InactivationConfig = None,
+        csi_cfg: CSInactivationConfig = None,
+        rec_cfg: RecoveryConfig = None,
+        g_k_max: float = None,
+        t_total: float = None,
+        dt: float = None,
     ):
-        self.exp      = experimental_data
-        self.w        = weights or self._DEFAULT_WEIGHTS
-        self._msm_def    = msm_def
-        self._act_cfg    = act_cfg
-        self._inact_cfg  = inact_cfg
-        self._csi_cfg    = csi_cfg
-        self._rec_cfg    = rec_cfg
-        self._g_k_max    = g_k_max
-        self._t_total    = t_total
-        self._dt         = dt
+        self.exp = experimental_data
+        self.w = weights or self._DEFAULT_WEIGHTS
+        self._msm_def = msm_def
+        self._act_cfg = act_cfg
+        self._inact_cfg = inact_cfg
+        self._csi_cfg = csi_cfg
+        self._rec_cfg = rec_cfg
+        self._g_k_max = g_k_max
+        self._t_total = t_total
+        self._dt = dt
 
     # ------------------------------------------------------------------
 
     def _build_sim(self, parameters: np.ndarray) -> ProtocolSimulator:
         kw = dict(
             msm_def=self._msm_def,
-            act_cfg=self._act_cfg, inact_cfg=self._inact_cfg,
-            csi_cfg=self._csi_cfg, rec_cfg=self._rec_cfg,
+            act_cfg=self._act_cfg,
+            inact_cfg=self._inact_cfg,
+            csi_cfg=self._csi_cfg,
+            rec_cfg=self._rec_cfg,
         )
         if self._g_k_max is not None:
             kw["g_k_max"] = self._g_k_max
@@ -86,9 +90,9 @@ class CostFunction:
     # ------------------------------------------------------------------
 
     def individual_costs(self, parameters: np.ndarray) -> dict:
-        sim    = self._build_sim(parameters)
+        sim = self._build_sim(parameters)
         active = {k: v for k, v in self.exp.items() if v is not None}
-        costs  = {}
+        costs = {}
 
         if "activation" in active:
             x, y, _ = active["activation"]
@@ -121,6 +125,7 @@ class CostFunction:
 
 
 # ---------------------------------------------------------------------------
+
 
 class ParameterOptimizer:
     """Wraps differential_evolution (global) and L-BFGS-B (local)."""

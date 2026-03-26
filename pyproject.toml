@@ -11,4 +11,5 @@ dependencies = [
     "streamlit>=1.35",
     "plotly>=5.20",
     "torch>=2.2",
+    "black>=26.3.1",
 ]

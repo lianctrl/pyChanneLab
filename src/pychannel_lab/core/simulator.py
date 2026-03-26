@@ -11,14 +11,20 @@ from scipy.integrate import odeint
 from typing import Callable, Tuple
 
 from core.config import (
-    INITIAL_CONDITIONS, TIME_PARAMS, G_K_MAX,
-    ActivationConfig, InactivationConfig,
-    CSInactivationConfig, RecoveryConfig,
+    INITIAL_CONDITIONS,
+    TIME_PARAMS,
+    G_K_MAX,
+    ActivationConfig,
+    InactivationConfig,
+    CSInactivationConfig,
+    RecoveryConfig,
 )
 from core.model import IonChannelModel
 from core.protocols import (
-    ActivationProtocol, InactivationProtocol,
-    CSInactivationProtocol, RecoveryProtocol,
+    ActivationProtocol,
+    InactivationProtocol,
+    CSInactivationProtocol,
+    RecoveryProtocol,
 )
 
 
@@ -48,42 +54,43 @@ class ProtocolSimulator:
         self,
         parameters,
         msm_def=None,
-        act_cfg:   ActivationConfig      = None,
-        inact_cfg: InactivationConfig    = None,
-        csi_cfg:   CSInactivationConfig  = None,
-        rec_cfg:   RecoveryConfig        = None,
-        t_total:   float = TIME_PARAMS["tend"],
-        dt:        float = TIME_PARAMS["dt"],
-        g_k_max:   float = G_K_MAX,
-        initial_state = None,
+        act_cfg: ActivationConfig = None,
+        inact_cfg: InactivationConfig = None,
+        csi_cfg: CSInactivationConfig = None,
+        rec_cfg: RecoveryConfig = None,
+        t_total: float = TIME_PARAMS["tend"],
+        dt: float = TIME_PARAMS["dt"],
+        g_k_max: float = G_K_MAX,
+        initial_state=None,
     ):
-        self.params  = np.asarray(parameters, dtype=float)
+        self.params = np.asarray(parameters, dtype=float)
         self.t_total = t_total
-        self.dt      = dt
+        self.dt = dt
         self.g_k_max = g_k_max
 
         if msm_def is not None:
             from core.msm_builder import DynamicModel
-            self.model        = DynamicModel(msm_def, self.params)
-            self._open_idx    = msm_def.open_state_indices   # list of ints
-            self.s0           = (
+
+            self.model = DynamicModel(msm_def, self.params)
+            self._open_idx = msm_def.open_state_indices  # list of ints
+            self.s0 = (
                 msm_def.default_initial_conditions
                 if initial_state is None
                 else np.asarray(initial_state, dtype=float)
             )
         else:
-            self.model     = IonChannelModel(self.params)
-            self._open_idx = [10]   # default 11-state model: O is index 10
-            self.s0        = (
+            self.model = IonChannelModel(self.params)
+            self._open_idx = [10]  # default 11-state model: O is index 10
+            self.s0 = (
                 INITIAL_CONDITIONS
                 if initial_state is None
                 else np.asarray(initial_state, dtype=float)
             )
 
-        self.act_proto   = ActivationProtocol(act_cfg)
+        self.act_proto = ActivationProtocol(act_cfg)
         self.inact_proto = InactivationProtocol(inact_cfg)
-        self.csi_proto   = CSInactivationProtocol(csi_cfg)
-        self.rec_proto   = RecoveryProtocol(rec_cfg)
+        self.csi_proto = CSInactivationProtocol(csi_cfg)
+        self.rec_proto = RecoveryProtocol(rec_cfg)
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -96,7 +103,8 @@ class ProtocolSimulator:
         t = self._time_array()
         states = odeint(
             lambda s, time: self.model.equations(s, time, voltage_func),
-            self.s0, t,
+            self.s0,
+            t,
         )
         return t, states
 
@@ -144,8 +152,8 @@ class ProtocolSimulator:
         for i, V in enumerate(test_voltages):
             _, states = self._simulate(proto.get_voltage_function(V))
             baseline = self._open_at(states, i_test - 1)
-            peak     = float(np.max(states[i_test:, self._open_idx].sum(axis=1)))
-            g        = self.g_k_max * (peak - baseline)
+            peak = float(np.max(states[i_test:, self._open_idx].sum(axis=1)))
+            g = self.g_k_max * (peak - baseline)
             currents[i] = g * (v_depo - v_hold)
 
         mx = np.max(currents)
@@ -165,7 +173,7 @@ class ProtocolSimulator:
             _, states = self._simulate(proto.get_voltage_function(t_pulse))
             i_pulse = self._idx(t_pulse)
             baseline_max = float(
-                np.max(states[0:i_prep + 1, self._open_idx].sum(axis=1))
+                np.max(states[0 : i_prep + 1, self._open_idx].sum(axis=1))
             )
             if baseline_max == 0:
                 baseline_max = 1e-12
@@ -181,19 +189,19 @@ class ProtocolSimulator:
         if test_times is None:
             test_times = proto.get_test_times()
 
-        cfg         = proto.cfg
+        cfg = proto.cfg
         i_pre_start = self._idx(cfg.t_prep)
-        i_pre_end   = self._idx(cfg.t_pulse)
+        i_pre_end = self._idx(cfg.t_pulse)
         v_depo, v_hold = cfg.v_depo, cfg.v_hold
 
         ratios = np.zeros(len(test_times))
         for i, t_rec_end in enumerate(test_times):
             _, states = self._simulate(proto.get_voltage_function(t_rec_end))
-            g_pre  = self.g_k_max * self._peak_open(states, i_pre_start, i_pre_end)
+            g_pre = self.g_k_max * self._peak_open(states, i_pre_start, i_pre_end)
             g_test = self.g_k_max * float(
-                np.max(states[self._idx(t_rec_end):, self._open_idx].sum(axis=1))
+                np.max(states[self._idx(t_rec_end) :, self._open_idx].sum(axis=1))
             )
-            I_pre  = g_pre  * (v_depo - v_hold)
+            I_pre = g_pre * (v_depo - v_hold)
             I_test = g_test * (v_depo - v_hold)
             ratios[i] = I_test / I_pre if I_pre > 0 else 0.0
 
