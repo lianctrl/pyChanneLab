@@ -259,6 +259,21 @@ class DynamicModel:
 
         return tuple(derivs)
 
+    def build_Q(self, V: float) -> np.ndarray:
+        """
+        Build the generator matrix Q at voltage V.
+
+        Q[j, i] = rate(i→j) for i≠j; Q[i, i] = -(sum of outgoing rates from i)
+        """
+        ns = {**self._base_ns, "V": V}
+        n = self.defn.n_states
+        Q = np.zeros((n, n), dtype=float)
+        for i, j, expr in self._transitions:
+            rate = eval(expr, ns)  # noqa: S307
+            Q[j, i] += rate
+            Q[i, i] -= rate
+        return Q
+
 
 # ---------------------------------------------------------------------------
 # Layout helper for the network diagram
@@ -386,5 +401,5 @@ def make_11state_preset() -> MSMDefinition:
 
 
 PRESETS = {
-    "11-state Kv channel (C0–C4, I0–I4, O)": make_11state_preset,
+    "11-state Kv channel (C0-C4, I0-I4, O)": make_11state_preset,
 }

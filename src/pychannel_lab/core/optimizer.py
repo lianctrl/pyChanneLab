@@ -53,6 +53,7 @@ class CostFunction:
         g_k_max: float = None,
         t_total: float = None,
         dt: float = None,
+        solver: str = "ode",
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
@@ -64,6 +65,7 @@ class CostFunction:
         self._g_k_max = g_k_max
         self._t_total = t_total
         self._dt = dt
+        self._solver = solver
 
     # ------------------------------------------------------------------
 
@@ -74,6 +76,7 @@ class CostFunction:
             inact_cfg=self._inact_cfg,
             csi_cfg=self._csi_cfg,
             rec_cfg=self._rec_cfg,
+            solver=self._solver,
         )
         if self._g_k_max is not None:
             kw["g_k_max"] = self._g_k_max

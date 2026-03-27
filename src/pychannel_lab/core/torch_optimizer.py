@@ -194,9 +194,9 @@ class TorchParameterOptimizer:
     Adam (warm-up) → L-BFGS (refinement) optimiser.
 
     Parameters are transformed to an unconstrained raw space via
-        raw = logit((p − lb) / (ub − lb))
+        raw = logit((p - lb) / (ub - lb))
     and recovered via
-        p = lb + (ub − lb) × sigmoid(raw)
+        p = lb + (ub - lb) * sigmoid(raw)
     so that gradient steps never violate the parameter bounds.
     """
 

@@ -107,7 +107,7 @@ class ActivationConfig:
     v_hold: float = -90.0  # mV — holding potential
     v_tail: float = -50.0  # mV — tail potential after test pulse
     v_min: float = -90.0  # mV — first test voltage
-    v_max: float = 60.0  # mV — last test voltage
+    v_max: float = 90.0  # mV — last test voltage
     v_step: float = 10.0  # mV — voltage step
     t_hold: float = 0.50  # s  — duration of holding phase
     t_test: float = 0.05  # s  — duration of test pulse

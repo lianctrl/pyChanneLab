@@ -101,7 +101,7 @@ def build_Q_11state(params: torch.Tensor, V: float) -> torch.Tensor:
     Build the generator matrix Q for the hardcoded 11-state Kv model.
 
     State order: C0=0 … C4=4, I0=5 … I4=9, O=10
-    Q[j, i] = rate(i→j) for i≠j;  Q[i, i] = −(sum of outgoing rates from i)
+    Q[j, i] = rate(i→j) for i≠j;  Q[i, i] = -(sum of outgoing rates from i)
     Fully differentiable w.r.t. params.
     """
     device, dtype = params.device, params.dtype

@@ -2,18 +2,18 @@
 Phenomenological curve fitting and information criteria for ion-channel protocols.
 
 Four model functions are provided:
-  exp_decay   — a·exp(−x/τ)+C          (e.g. inactivation onset)
-  exp_rise    — C+a·(1−exp(−x/τ))      (e.g. recovery, CSI)
-  sigmoid     — B+A/(1+exp(k·(x−v₀))) (Boltzmann, decreasing; e.g. h∞/V)
-  sigmoid_inv — B+A/(1+exp(−k·(x−v₀)))(Boltzmann, increasing; e.g. G/V)
+  exp_decay   — a·exp(-x/τ)+C          (e.g. inactivation onset)
+  exp_rise    — C+a·(1-exp(-x/τ))      (e.g. recovery, CSI)
+  sigmoid     — B+A/(1+exp(k·(x-v₀))) (Boltzmann, decreasing; e.g. h∞/V)
+  sigmoid_inv — B+A/(1+exp(-k·(x-v₀)))(Boltzmann, increasing; e.g. G/V)
 """
 
 import numpy as np
 from scipy.optimize import curve_fit
 from typing import Dict, List, Tuple
 
-
 # ─── model functions ──────────────────────────────────────────────────────────
+
 
 def _exp_decay(x, a, tau, C):
     """y = a * exp(-x/tau) + C"""
@@ -41,42 +41,43 @@ def _sigmoid_inv(x, A, B, k, v0):
 
 # {key: (function, formula_string, [param_names])}
 CURVE_FUNCTIONS: Dict[str, Tuple] = {
-    "exp_decay":   (_exp_decay,   "a·exp(−x/τ)+C",              ["a", "τ", "C"]),
-    "exp_rise":    (_exp_rise,    "C+a·(1−exp(−x/τ))",           ["a", "τ", "C"]),
-    "sigmoid":     (_sigmoid,     "B+A/(1+exp(k·(x−v₀)))",       ["A", "B", "k", "v₀"]),
-    "sigmoid_inv": (_sigmoid_inv, "B+A/(1+exp(−k·(x−v₀)))",      ["A", "B", "k", "v₀"]),
+    "exp_decay": (_exp_decay, "a·exp(-x/τ)+C", ["a", "τ", "C"]),
+    "exp_rise": (_exp_rise, "C+a·(1-exp(-x/τ))", ["a", "τ", "C"]),
+    "sigmoid": (_sigmoid, "B+A/(1+exp(k·(x-v₀)))", ["A", "B", "k", "v₀"]),
+    "sigmoid_inv": (_sigmoid_inv, "B+A/(1+exp(-k·(x-v₀)))", ["A", "B", "k", "v₀"]),
 }
 
 CURVE_LABELS: Dict[str, str] = {
-    "exp_decay":   "Exp decay: a·exp(−x/τ)+C",
-    "exp_rise":    "Exp rise: C+a·(1−exp(−x/τ))",
-    "sigmoid":     "Sigmoid (↓): B+A/(1+exp(k·(x−v₀)))",
-    "sigmoid_inv": "Inv sigmoid (↑): B+A/(1+exp(−k·(x−v₀)))",
+    "exp_decay": "Exp decay: a·exp(-x/τ)+C",
+    "exp_rise": "Exp rise: C+a·(1-exp(-x/τ))",
+    "sigmoid": "Sigmoid (↓): B+A/(1+exp(k·(x-v₀)))",
+    "sigmoid_inv": "Inv sigmoid (↑): B+A/(1+exp(-k·(x-v₀)))",
 }
 
 # Sensible defaults per protocol
 PROTOCOL_CURVE_DEFAULTS: Dict[str, str] = {
-    "activation":      "sigmoid_inv",  # G/V rises with voltage
-    "inactivation":    "sigmoid",      # h∞/V decreases with voltage
-    "cs_inactivation": "exp_rise",     # rises with prepulse duration
-    "recovery":        "exp_rise",     # recovers (rises) with interval
+    "activation": "sigmoid_inv",  # G/V rises with voltage
+    "inactivation": "sigmoid",  # h∞/V decreases with voltage
+    "cs_inactivation": "exp_rise",  # rises with prepulse duration
+    "recovery": "exp_rise",  # recovers (rises) with interval
 }
 
 # Python-source names (for generated scripts)
 CURVE_FUNC_NAMES: Dict[str, str] = {
-    "exp_decay":   "_exp_decay",
-    "exp_rise":    "_exp_rise",
-    "sigmoid":     "_sigmoid",
+    "exp_decay": "_exp_decay",
+    "exp_rise": "_exp_rise",
+    "sigmoid": "_sigmoid",
     "sigmoid_inv": "_sigmoid_inv",
 }
 
 
 # ─── fitting ──────────────────────────────────────────────────────────────────
 
+
 def _initial_guess(x: np.ndarray, y: np.ndarray, curve_type: str) -> List[float]:
     y_range = float(np.ptp(y)) or 1.0
-    y_min   = float(np.min(y))
-    x_mid   = float(np.median(x))
+    y_min = float(np.min(y))
+    x_mid = float(np.median(x))
     x_range = float(np.ptp(x)) or 1.0
 
     if curve_type in ("exp_decay", "exp_rise"):
@@ -130,6 +131,7 @@ def eval_curve(x: np.ndarray, popt: np.ndarray, curve_type: str) -> np.ndarray:
 
 # ─── AIC / BIC ────────────────────────────────────────────────────────────────
 
+
 def compute_aic_bic(
     fitted_params: np.ndarray,
     exp_data: dict,
@@ -149,7 +151,7 @@ def compute_aic_bic(
     sim_data      : {protocol_key: (x_sim, y_sim)}
     """
     k = int(len(fitted_params))
-    n_total  = 0
+    n_total = 0
     rss_total = 0.0
 
     for pk, exp in exp_data.items():
@@ -163,13 +165,13 @@ def compute_aic_bic(
             np.asarray(y_sim, float),
         )
         rss_total += float(np.sum((np.asarray(y_exp, float) - y_pred) ** 2))
-        n_total   += int(len(y_exp))
+        n_total += int(len(y_exp))
 
     out: Dict[str, float] = {
         "AIC": float("nan"),
         "BIC": float("nan"),
         "n_points": float(n_total),
-        "k_params":  float(k),
+        "k_params": float(k),
         "RSS": rss_total,
     }
 

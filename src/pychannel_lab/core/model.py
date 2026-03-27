@@ -8,6 +8,67 @@ import numpy as np
 from core.config import EXP_FACTOR
 
 
+def build_Q(params: np.ndarray, V: float) -> np.ndarray:
+    """
+    Build the 11x11 generator (rate) matrix Q for the hardcoded 11-state model.
+
+    State order: C0=0 … C4=4, I0=5 … I4=9, O=10
+    Convention: Q[j, i] = rate(i→j) for i≠j; Q[i, i] = -(sum of outgoing rates from i)
+
+    Parameters
+    ----------
+    params : array-like, shape (11,)
+    V : float — membrane voltage (mV)
+    """
+    p = np.asarray(params, dtype=float)
+    alpha = p[0] * np.exp(p[1] * V * EXP_FACTOR)
+    beta = p[2] * np.exp(-p[3] * V * EXP_FACTOR)
+    k_CO = p[4] * np.exp(p[5] * V * EXP_FACTOR)
+    k_OC = p[6] * np.exp(-p[7] * V * EXP_FACTOR)
+    k_CI, k_IC, f = p[8], p[9], p[10]
+
+    Q = np.zeros((11, 11), dtype=float)
+
+    def _add(i, j, r):
+        Q[j, i] += r
+        Q[i, i] -= r
+
+    # C-ladder
+    _add(0, 1, 4 * alpha)
+    _add(1, 0, beta)
+    _add(1, 2, 3 * alpha)
+    _add(2, 1, 2 * beta)
+    _add(2, 3, 2 * alpha)
+    _add(3, 2, 3 * beta)
+    _add(3, 4, alpha)
+    _add(4, 3, 4 * beta)
+    # I-ladder
+    _add(5, 6, 4 * alpha / f)
+    _add(6, 5, beta * f)
+    _add(6, 7, 3 * alpha / f)
+    _add(7, 6, 2 * beta * f)
+    _add(7, 8, 2 * alpha / f)
+    _add(8, 7, 3 * beta * f)
+    _add(8, 9, alpha / f)
+    _add(9, 8, 4 * beta * f)
+    # C ↔ I vertical
+    _add(0, 5, k_CI * f**4)
+    _add(5, 0, k_IC / f**4)
+    _add(1, 6, k_CI * f**3)
+    _add(6, 1, k_IC / f**3)
+    _add(2, 7, k_CI * f**2)
+    _add(7, 2, k_IC / f**2)
+    _add(3, 8, k_CI * f)
+    _add(8, 3, k_IC / f)
+    _add(4, 9, k_CI)
+    _add(9, 4, k_IC)
+    # C4 ↔ O
+    _add(4, 10, k_CO)
+    _add(10, 4, k_OC)
+
+    return Q
+
+
 class IonChannelModel:
     """
     11-state Markov model.

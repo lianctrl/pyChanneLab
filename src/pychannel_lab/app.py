@@ -73,7 +73,7 @@ st.caption("Build your own Markov State Model, configure protocols, upload data,
 
 def _init_state():
     if "msm_def" not in st.session_state:
-        st.session_state.msm_def = PRESETS["11-state Kv channel (C0–C4, I0–I4, O)"]()
+        st.session_state.msm_def = PRESETS["11-state Kv channel (C0-C4, I0-I4, O)"]()
 
     _DEFAULTS = {
         "initial_conditions": None,  # None → derived from msm_def
@@ -153,6 +153,7 @@ def _build_sim(params: np.ndarray) -> ProtocolSimulator:
         dt=ss.dt,
         g_k_max=ss.g_k_max,
         initial_state=_ic(),
+        solver=ss.get("solver", "ode"),
     )
 
 
@@ -168,6 +169,7 @@ def _build_cost() -> CostFunction:
         g_k_max=ss.g_k_max,
         t_total=ss.t_total,
         dt=ss.dt,
+        solver=ss.get("solver", "ode"),
     )
 
 
@@ -1330,6 +1332,19 @@ with tab_opt:
         method = col1.selectbox("Method", _method_options, key="opt_method")
 
         use_torch = method == _TORCH_LABEL
+
+        if not use_torch:
+            col1.radio(
+                "Solver",
+                ["ode", "qmatrix"],
+                horizontal=True,
+                key="solver",
+                help=(
+                    "**ode** — scipy odeint (numerical integration). "
+                    "**qmatrix** — matrix exponential P(t+dt)=expm(Q·dt)@P(t), "
+                    "exact for piecewise-constant voltage within each dt step."
+                ),
+            )
 
         if use_torch:
             _dev_name = str(_torch_device) if _torch_device else "cpu"
