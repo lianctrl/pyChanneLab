@@ -42,6 +42,14 @@ from core.msm_builder import (
 from core.simulator import ProtocolSimulator
 from core.optimizer import CostFunction, ParameterOptimizer
 from core.data_loader import load_from_bytes
+from core.curve_fitter import (
+    fit_curve,
+    eval_curve,
+    compute_aic_bic,
+    CURVE_FUNCTIONS,
+    CURVE_LABELS,
+    PROTOCOL_CURVE_DEFAULTS,
+)
 
 # PyTorch back-end (optional — graceful fallback if not installed)
 try:
@@ -83,6 +91,9 @@ def _init_state():
         "fitted_params": None,
         "opt_costs_initial": None,
         "opt_costs_final": None,
+        "curve_fit_types": {},      # {pk: curve_type_key}
+        "curve_fit_params_exp": {},  # {pk: (popt, perr, ok, cft)}
+        "curve_fit_params_sim": {},  # {pk: (popt, perr, ok, cft)}
         "opt_weights": {
             "activation": 1.0,
             "inactivation": 1.0,
@@ -353,8 +364,8 @@ def _voltage_preview(proto_key: str) -> go.Figure:
     return fig
 
 
-def _comparison_figure(params: np.ndarray) -> go.Figure:
-    sim_data = _simulate_all(params)
+def _comparison_figure(params: np.ndarray, _sim_data: dict = None) -> go.Figure:
+    sim_data = _sim_data if _sim_data is not None else _simulate_all(params)
     fig = make_subplots(
         rows=2,
         cols=2,
@@ -407,6 +418,388 @@ def _comparison_figure(params: np.ndarray) -> go.Figure:
 
     fig.update_layout(height=700, title_text="Experimental vs Simulated")
     return fig
+
+
+def _curve_fit_comparison_table(sim_data: dict) -> pd.DataFrame:
+    """Build a DataFrame comparing exp vs sim curve-fit parameters."""
+    rows = []
+    for pk in PROTOCOL_KEYS:
+        if pk not in ss.exp_data or pk not in sim_data:
+            continue
+        cft = ss.curve_fit_types.get(pk, PROTOCOL_CURVE_DEFAULTS[pk])
+        _, formula, param_names = CURVE_FUNCTIONS[cft]
+
+        # Exp fit (already cached)
+        exp_entry = ss.curve_fit_params_exp.get(pk)
+        if exp_entry is not None:
+            popt_exp, perr_exp, ok_exp, _ = exp_entry
+        else:
+            x_e, y_e, _ = ss.exp_data[pk]
+            popt_exp, perr_exp, ok_exp = fit_curve(x_e, y_e, cft)
+
+        # Sim fit (compute now)
+        x_s, y_s = sim_data[pk]
+        popt_sim, perr_sim, ok_sim = fit_curve(x_s, y_s, cft)
+        ss.curve_fit_params_sim[pk] = (popt_sim, perr_sim, ok_sim, cft)
+
+        for i, pn in enumerate(param_names):
+            def _fmt(ok, popt, perr, idx):
+                if not ok or np.isnan(popt[idx]):
+                    return "—"
+                e = perr[idx]
+                if np.isnan(e):
+                    return f"{popt[idx]:.4g}"
+                return f"{popt[idx]:.4g} ± {e:.4g}"
+
+            rows.append({
+                "Protocol": PROTOCOL_LABELS[pk],
+                "Fit function": formula,
+                "Parameter": pn,
+                "Exp fit": _fmt(ok_exp, popt_exp, perr_exp, i),
+                "Sim fit": _fmt(ok_sim, popt_sim, perr_sim, i),
+            })
+    return pd.DataFrame(rows)
+
+
+def _generate_run_script() -> str:
+    """Return a self-contained Python script that reproduces the current optimisation."""
+    import dataclasses
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def cfg_kwargs(cfg) -> str:
+        return ", ".join(
+            f"{f.name}={getattr(cfg, f.name)!r}" for f in dataclasses.fields(cfg)
+        )
+
+    # ── Serialise experimental data as numpy literals ──────────────────────
+    exp_lines: list[str] = []
+    for pk in PROTOCOL_KEYS:
+        tup = ss.exp_data.get(pk)
+        if tup is None:
+            exp_lines.append(f'    "{pk}": None,')
+            continue
+        x, y, y_err = tup
+        xl = f"np.array({x.tolist()})"
+        yl = f"np.array({y.tolist()})"
+        yel = f"np.array({y_err.tolist()})" if y_err is not None else "None"
+        exp_lines.append(f'    "{pk}": ({xl}, {yl}, {yel}),')
+
+    ic_arr = _ic()
+
+    L: list[str] = []
+
+    def w(line: str = "") -> None:
+        L.append(line)
+
+    # ── header ────────────────────────────────────────────────────────────
+    w('#!/usr/bin/env python3')
+    w(f'"""')
+    w(f'pyChanneLab auto-generated run script.')
+    w(f'Generated: {ts}')
+    w()
+    w('Steps executed:')
+    w('  1. Global optimisation (Differential Evolution)')
+    w('  2. Local refinement (L-BFGS-B)')
+    w('  3. Simulate fitted model')
+    w('  4. Compute AIC / BIC')
+    w('  5. Fit phenomenological curves to exp and sim data')
+    w('  6. Save comparison plots (plotly HTML + matplotlib PNG if available)')
+    w('  7. Write Markdown report')
+    w('"""')
+    w()
+    w('import sys, json')
+    w('from pathlib import Path')
+    w('import numpy as np')
+    w()
+    w('# ── path setup ──────────────────────────────────────────────────────────')
+    w('# Place this script alongside app.py (inside pyChanneLab/) before running.')
+    w('_HERE = Path(__file__).resolve().parent')
+    w('sys.path.insert(0, str(_HERE))')
+    w()
+    w('from core.config import ActivationConfig, InactivationConfig, CSInactivationConfig, RecoveryConfig')
+    w('from core.msm_builder import MSMDefinition')
+    w('from core.simulator import ProtocolSimulator')
+    w('from core.optimizer import CostFunction, ParameterOptimizer')
+    w('from core.curve_fitter import fit_curve, eval_curve, compute_aic_bic, CURVE_LABELS, CURVE_FUNCTIONS')
+    w()
+    w('OUT_DIR = Path("pychannelab_output")')
+    w('OUT_DIR.mkdir(exist_ok=True)')
+    w()
+
+    # ── MSM ───────────────────────────────────────────────────────────────
+    msm_json_str = ss.msm_def.to_json()
+    w('# ── MSM definition (embedded) ──────────────────────────────────────────')
+    w(f'_MSM_JSON = {repr(msm_json_str)}')
+    w('msm_def = MSMDefinition.from_json(_MSM_JSON)')
+    w()
+
+    # ── Protocol configs ──────────────────────────────────────────────────
+    w('# ── protocol configs ───────────────────────────────────────────────────')
+    w(f'act_cfg   = ActivationConfig({cfg_kwargs(ss.act_cfg)})')
+    w(f'inact_cfg = InactivationConfig({cfg_kwargs(ss.inact_cfg)})')
+    w(f'csi_cfg   = CSInactivationConfig({cfg_kwargs(ss.csi_cfg)})')
+    w(f'rec_cfg   = RecoveryConfig({cfg_kwargs(ss.rec_cfg)})')
+    w(f'g_k_max = {ss.g_k_max!r}')
+    w(f't_total = {ss.t_total!r}')
+    w(f'dt      = {ss.dt!r}')
+    w(f'initial_state = np.array({ic_arr.tolist()})')
+    w()
+
+    # ── Experimental data ─────────────────────────────────────────────────
+    w('# ── experimental data (embedded) ──────────────────────────────────────')
+    w('exp_data = {')
+    for line in exp_lines:
+        w(line)
+    w('}')
+    w()
+
+    # ── Weights ───────────────────────────────────────────────────────────
+    w('# ── optimisation weights ───────────────────────────────────────────────')
+    w('weights = {')
+    for pk, wt in ss.opt_weights.items():
+        w(f'    "{pk}": {wt},')
+    w('}')
+    w()
+
+    # ── Curve-fit types ───────────────────────────────────────────────────
+    w('# ── curve-fit function per protocol ────────────────────────────────────')
+    w('curve_fit_types = {')
+    for pk in PROTOCOL_KEYS:
+        cft = ss.curve_fit_types.get(pk, PROTOCOL_CURVE_DEFAULTS[pk])
+        w(f'    "{pk}": "{cft}",')
+    w('}')
+    w()
+
+    # ── Display labels (needed in plots / report) ─────────────────────────
+    w('PROTOCOL_KEYS = ["activation", "inactivation", "cs_inactivation", "recovery"]')
+    w('PROTOCOL_LABELS = {')
+    for pk, lbl in PROTOCOL_LABELS.items():
+        w(f'    "{pk}": "{lbl}",')
+    w('}')
+    w('PROTOCOL_X_LABELS = {')
+    for pk, lbl in PROTOCOL_X_LABELS.items():
+        w(f'    "{pk}": "{lbl}",')
+    w('}')
+    w('PROTOCOL_Y_LABELS = {')
+    for pk, lbl in PROTOCOL_Y_LABELS.items():
+        w(f'    "{pk}": "{lbl}",')
+    w('}')
+    w()
+
+    # ── Step 1: optimisation ──────────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 1  Optimisation')
+    w('# ' + '─' * 72)
+    w('cost_fn = CostFunction(')
+    w('    exp_data,')
+    w('    weights=weights,')
+    w('    msm_def=msm_def,')
+    w('    act_cfg=act_cfg, inact_cfg=inact_cfg, csi_cfg=csi_cfg, rec_cfg=rec_cfg,')
+    w('    g_k_max=g_k_max, t_total=t_total, dt=dt,')
+    w(')')
+    w('optimizer = ParameterOptimizer(cost_fn)')
+    w('bounds = list(msm_def.bounds)')
+    w()
+    w('print("Running global optimisation (Differential Evolution)…")')
+    w('result = optimizer.optimize_global(bounds=bounds, maxiter=5000)')
+    w('print(f"  cost = {result.fun:.6f}")')
+    w()
+    w('print("Running local refinement (L-BFGS-B)…")')
+    w('result = optimizer.optimize_local(initial_guess=result.x, bounds=bounds)')
+    w('print(f"  cost = {result.fun:.6f}")')
+    w()
+    w('fitted_params = result.x')
+    w('print("\\nFitted parameters:")')
+    w('for pspec, val in zip(msm_def.parameters, fitted_params):')
+    w('    print(f"  {pspec.name:20s} = {val:.6g}")')
+    w()
+
+    # ── Step 2: simulate ─────────────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 2  Simulate with fitted parameters')
+    w('# ' + '─' * 72)
+    w('sim = ProtocolSimulator(')
+    w('    fitted_params,')
+    w('    msm_def=msm_def,')
+    w('    act_cfg=act_cfg, inact_cfg=inact_cfg, csi_cfg=csi_cfg, rec_cfg=rec_cfg,')
+    w('    t_total=t_total, dt=dt, g_k_max=g_k_max, initial_state=initial_state,')
+    w(')')
+    w('csi_x_ms = (sim.csi_proto.get_test_times() - csi_cfg.t_initial) * 1000.0')
+    w('rec_x_ms = (sim.rec_proto.get_test_times() - rec_cfg.t_pulse)   * 1000.0')
+    w('sim_data = {')
+    w('    "activation":      (sim.act_proto.get_test_voltages(),   sim.run_activation()),')
+    w('    "inactivation":    (sim.inact_proto.get_test_voltages(), sim.run_inactivation()),')
+    w('    "cs_inactivation": (csi_x_ms, sim.run_cs_inactivation()),')
+    w('    "recovery":        (rec_x_ms, sim.run_recovery()),')
+    w('}')
+    w()
+
+    # ── Step 3: AIC/BIC ───────────────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 3  AIC / BIC')
+    w('# ' + '─' * 72)
+    w('ab = compute_aic_bic(fitted_params, exp_data, sim_data)')
+    w("print(f\"\\nAIC = {ab['AIC']:.3f}  |  BIC = {ab['BIC']:.3f}\")")
+    w("print(f\"  n={int(ab['n_points'])}, k={int(ab['k_params'])}, RSS={ab['RSS']:.4g}\")")
+    w()
+
+    # ── Step 4: curve fits ────────────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 4  Phenomenological curve fits')
+    w('# ' + '─' * 72)
+    w('curve_fit_results = {}')
+    w('for pk, cft in curve_fit_types.items():')
+    w('    entry = {}')
+    w('    if pk in exp_data and exp_data[pk] is not None:')
+    w('        x_e, y_e, _ = exp_data[pk]')
+    w('        entry["exp"] = fit_curve(x_e, y_e, cft)')
+    w('    if pk in sim_data:')
+    w('        x_s, y_s = sim_data[pk]')
+    w('        entry["sim"] = fit_curve(x_s, y_s, cft)')
+    w('    curve_fit_results[pk] = entry')
+    w()
+
+    # ── Step 5: plots ─────────────────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 5  Save comparison plots')
+    w('# ' + '─' * 72)
+    w('try:')
+    w('    import plotly.graph_objects as go')
+    w('    from plotly.subplots import make_subplots')
+    w('    fig = make_subplots(rows=2, cols=2,')
+    w('                        subplot_titles=list(PROTOCOL_LABELS.values()),')
+    w('                        vertical_spacing=0.18, horizontal_spacing=0.12)')
+    w('    for (row, col), pk in zip([(1,1),(1,2),(2,1),(2,2)], PROTOCOL_KEYS):')
+    w('        x_s, y_s = sim_data[pk]')
+    w('        first = (row == 1 and col == 1)')
+    w('        if pk in exp_data and exp_data[pk] is not None:')
+    w('            x_e, y_e, y_err = exp_data[pk]')
+    w('            ekw = dict(error_y=dict(type="data", array=(y_err.tolist() if y_err is not None else None), visible=True)) if y_err is not None else {}')
+    w('            fig.add_trace(go.Scatter(x=x_e.tolist(), y=y_e.tolist(), mode="markers",')
+    w('                                     name="Exp", marker=dict(color="#1f77b4", size=8),')
+    w('                                     showlegend=first, **ekw), row=row, col=col)')
+    w('        fig.add_trace(go.Scatter(x=x_s.tolist(), y=y_s.tolist(), mode="lines",')
+    w('                                 name="Sim", line=dict(color="#d62728", width=2),')
+    w('                                 showlegend=first), row=row, col=col)')
+    w('        entry = curve_fit_results.get(pk, {})')
+    w('        popt_s, _, ok_s = entry.get("sim", (None, None, False))')
+    w('        if ok_s and popt_s is not None and not np.any(np.isnan(popt_s)):')
+    w('            x_fit = np.linspace(float(x_s.min()), float(x_s.max()), 300)')
+    w('            y_fit = eval_curve(x_fit, popt_s, curve_fit_types[pk])')
+    w('            fig.add_trace(go.Scatter(x=x_fit.tolist(), y=y_fit.tolist(), mode="lines",')
+    w('                                     name="Fit (sim)", line=dict(color="#2ca02c", width=1.5, dash="dot"),')
+    w('                                     showlegend=first), row=row, col=col)')
+    w('        fig.update_xaxes(title_text=PROTOCOL_X_LABELS[pk], row=row, col=col)')
+    w('        fig.update_yaxes(title_text=PROTOCOL_Y_LABELS[pk], row=row, col=col)')
+    w('    fig.update_layout(height=700, title_text="Experimental vs Simulated")')
+    w('    _html = OUT_DIR / "comparison.html"')
+    w('    fig.write_html(str(_html))')
+    w('    print(f"Saved: {_html}")')
+    w('except Exception as _e:')
+    w('    print(f"Plotly plot skipped: {_e}")')
+    w()
+    w('try:')
+    w('    import matplotlib.pyplot as plt')
+    w('    fig_mpl, axes = plt.subplots(2, 2, figsize=(12, 9))')
+    w('    for ax, pk in zip(axes.flat, PROTOCOL_KEYS):')
+    w('        x_s, y_s = sim_data[pk]')
+    w('        ax.plot(x_s, y_s, color="#d62728", linewidth=2, label="Sim")')
+    w('        if pk in exp_data and exp_data[pk] is not None:')
+    w('            x_e, y_e, y_err = exp_data[pk]')
+    w('            if y_err is not None:')
+    w('                ax.errorbar(x_e, y_e, yerr=y_err, fmt="o",')
+    w('                            color="#1f77b4", markersize=5, label="Exp")')
+    w('            else:')
+    w('                ax.scatter(x_e, y_e, color="#1f77b4", s=25, label="Exp")')
+    w('            entry = curve_fit_results.get(pk, {})')
+    w('            popt_e, _, ok_e = entry.get("exp", (None, None, False))')
+    w('            if ok_e and popt_e is not None and not np.any(np.isnan(popt_e)):')
+    w('                x_fit = np.linspace(float(x_e.min()), float(x_e.max()), 300)')
+    w('                y_fit = eval_curve(x_fit, popt_e, curve_fit_types[pk])')
+    w('                ax.plot(x_fit, y_fit, "--", color="#ff7f0e",')
+    w('                        linewidth=1.5, label="Fit (exp)")')
+    w('        ax.set_xlabel(PROTOCOL_X_LABELS[pk])')
+    w('        ax.set_ylabel(PROTOCOL_Y_LABELS[pk])')
+    w('        ax.set_title(PROTOCOL_LABELS[pk])')
+    w('        ax.legend(fontsize=8)')
+    w('    plt.tight_layout()')
+    w('    _png = OUT_DIR / "comparison.png"')
+    w('    fig_mpl.savefig(str(_png), dpi=150)')
+    w('    plt.close(fig_mpl)')
+    w('    print(f"Saved: {_png}")')
+    w('except ImportError:')
+    w('    print("matplotlib not available — PNG skipped")')
+    w('except Exception as _e:')
+    w('    print(f"matplotlib plot skipped: {_e}")')
+    w()
+
+    # ── Step 6: Markdown report ───────────────────────────────────────────
+    w('# ' + '─' * 72)
+    w('# STEP 6  Markdown report')
+    w('# ' + '─' * 72)
+    w('def _fmt(entry_dict, key, idx):')
+    w('    e = entry_dict.get(key)')
+    w('    if e is None: return "—"')
+    w('    popt, perr, ok = e')
+    w('    if not ok or np.isnan(popt[idx]): return "—"')
+    w('    return f"{popt[idx]:.4g}" if np.isnan(perr[idx]) else f"{popt[idx]:.4g} ± {perr[idx]:.4g}"')
+    w()
+    w(f'_ts = "{ts}"')
+    w('_n_s = msm_def.n_states')
+    w('_n_t = len(msm_def.transitions)')
+    w('_n_p = len(msm_def.parameters)')
+    w()
+    w('md = []')
+    w('md.append("# pyChanneLab Optimisation Report")')
+    w('md.append("")')
+    w('md.append(f"**Generated:** {_ts}  ")')
+    w('md.append(f"**Model:** {_n_s} states · {_n_t} transitions · {_n_p} free parameters")')
+    w('md.append("")')
+    w('md.append("---")')
+    w('md.append("")')
+    w('md.append("## 1. Optimised parameters")')
+    w('md.append("")')
+    w('md.append("| Parameter | Fitted value | Bounds |")')
+    w('md.append("|-----------|-------------|--------|")')
+    w('for pspec, val in zip(msm_def.parameters, fitted_params):')
+    w('    md.append(f"| {pspec.name} | {val:.6g} | [{pspec.lower_bound}, {pspec.upper_bound}] |")')
+    w('md.append("")')
+    w('md.append("---")')
+    w('md.append("")')
+    w('md.append("## 2. Model information criteria (AIC / BIC)")')
+    w('md.append("")')
+    w('md.append("| Metric | Value |")')
+    w('md.append("|--------|-------|")')
+    w("md.append(f\"| AIC | {ab['AIC']:.3f} |\")")
+    w("md.append(f\"| BIC | {ab['BIC']:.3f} |\")")
+    w("md.append(f\"| RSS | {ab['RSS']:.4g} |\")")
+    w("md.append(f\"| n data points | {int(ab['n_points'])} |\")")
+    w("md.append(f\"| k free parameters | {int(ab['k_params'])} |\")")
+    w('md.append("")')
+    w('md.append("> Lower AIC/BIC = better fit relative to model complexity.")')
+    w('md.append("")')
+    w('md.append("---")')
+    w('md.append("")')
+    w('md.append("## 3. Phenomenological curve-fit comparison")')
+    w('md.append("")')
+    w('md.append("| Protocol | Fit function | Parameter | Exp fit | Sim fit |")')
+    w('md.append("|----------|-------------|-----------|---------|---------|")')
+    w('for pk, cft in curve_fit_types.items():')
+    w('    if pk not in exp_data or exp_data[pk] is None:')
+    w('        continue')
+    w('    _, formula, param_names = CURVE_FUNCTIONS[cft]')
+    w('    entry = curve_fit_results.get(pk, {})')
+    w('    for i, pn in enumerate(param_names):')
+    w('        md.append(f"| {PROTOCOL_LABELS[pk]} | {formula} | {pn} "')
+    w('                  f"| {_fmt(entry, \'exp\', i)} | {_fmt(entry, \'sim\', i)} |")')
+    w()
+    w('_md_path = OUT_DIR / "report.md"')
+    w('_md_path.write_text("\\n".join(md))')
+    w('print(f"Saved: {_md_path}")')
+    w('print(f"\\nAll done. Output in: {OUT_DIR.resolve()}")')
+
+    return "\n".join(L)
 
 
 # TABS
@@ -827,6 +1220,24 @@ with tab_data:
 
             if pk in ss.exp_data:
                 x, y, y_err = ss.exp_data[pk]
+
+                # ── curve type selector ───────────────────────────────────
+                cft_default = ss.curve_fit_types.get(pk, PROTOCOL_CURVE_DEFAULTS[pk])
+                cft_keys = list(CURVE_LABELS.keys())
+                cft = st.selectbox(
+                    "Fit function",
+                    cft_keys,
+                    index=cft_keys.index(cft_default),
+                    format_func=lambda k: CURVE_LABELS[k],
+                    key=f"cft_{pk}",
+                )
+                ss.curve_fit_types[pk] = cft
+
+                # compute fit and cache
+                popt, perr, ok = fit_curve(x, y, cft)
+                ss.curve_fit_params_exp[pk] = (popt, perr, ok, cft)
+
+                # ── plot: data + fit curve ────────────────────────────────
                 fig = go.Figure()
                 err_kw = (
                     dict(error_y=dict(type="data", array=y_err, visible=True))
@@ -835,18 +1246,59 @@ with tab_data:
                 )
                 fig.add_trace(
                     go.Scatter(
-                        x=x, y=y, mode="markers+lines", marker=dict(size=7), **err_kw
+                        x=x,
+                        y=y,
+                        mode="markers",
+                        name="Data",
+                        marker=dict(size=7, color="#1f77b4"),
+                        **err_kw,
                     )
                 )
+                if ok and not np.any(np.isnan(popt)):
+                    x_fit = np.linspace(float(x.min()), float(x.max()), 300)
+                    y_fit = eval_curve(x_fit, popt, cft)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x_fit,
+                            y=y_fit,
+                            mode="lines",
+                            name=f"Fit ({CURVE_LABELS[cft]})",
+                            line=dict(color="#ff7f0e", width=2, dash="dash"),
+                        )
+                    )
                 fig.update_layout(
                     xaxis_title=PROTOCOL_X_LABELS[pk],
                     yaxis_title=PROTOCOL_Y_LABELS[pk],
-                    height=260,
+                    height=280,
                     margin=dict(t=10, b=40, l=60, r=20),
+                    legend=dict(orientation="h", y=1.12),
                 )
                 st.plotly_chart(fig, width="stretch")
+
+                # ── fit parameter table ───────────────────────────────────
+                if ok:
+                    _, formula, param_names = CURVE_FUNCTIONS[cft]
+                    st.caption(f"Fit: {formula}")
+                    fit_rows = []
+                    for i, pn in enumerate(param_names):
+                        val = popt[i] if not np.isnan(popt[i]) else None
+                        err = perr[i] if not np.isnan(perr[i]) else None
+                        fit_rows.append({
+                            "Parameter": pn,
+                            "Value": f"{val:.4g}" if val is not None else "—",
+                            "± 1σ":  f"{err:.4g}" if err is not None else "—",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(fit_rows),
+                        hide_index=True,
+                        width='stretch',
+                    )
+                else:
+                    st.warning("Curve fit did not converge.")
+
                 if st.button(f"Remove {PROTOCOL_LABELS[pk]} data", key=f"rm_{pk}"):
                     del ss.exp_data[pk]
+                    ss.curve_fit_params_exp.pop(pk, None)
                     st.rerun()
 
     if ss.exp_data:
@@ -1158,7 +1610,26 @@ with tab_results:
                 },
                 "model": ss.msm_def.to_dict(),
             }
-            dl1, dl2 = st.columns(2)
+
+            # ── AIC / BIC ─────────────────────────────────────────────────
+            if ss.exp_data:
+                st.subheader("Model information criteria (AIC / BIC)")
+                with st.spinner("Computing AIC/BIC…"):
+                    _ab_sim = _simulate_all(ss.fitted_params)
+                    ab = compute_aic_bic(ss.fitted_params, ss.exp_data, _ab_sim)
+                _ca, _cb, _cc, _cd, _ce = st.columns(5)
+                _ca.metric("AIC", f"{ab['AIC']:.2f}" if not math.isnan(ab["AIC"]) else "—")
+                _cb.metric("BIC", f"{ab['BIC']:.2f}" if not math.isnan(ab["BIC"]) else "—")
+                _cc.metric("RSS", f"{ab['RSS']:.4g}")
+                _cd.metric("n points", int(ab["n_points"]))
+                _ce.metric("k params", int(ab["k_params"]))
+                st.caption(
+                    "Lower AIC/BIC = better model relative to its complexity. "
+                    "Use these scores to compare models with different numbers of states."
+                )
+
+            # ── downloads ─────────────────────────────────────────────────
+            dl1, dl2, dl3 = st.columns(3)
             dl1.download_button(
                 "Download parameters (JSON)",
                 data=json.dumps(save_dict, indent=2),
@@ -1171,10 +1642,37 @@ with tab_results:
                 file_name=f"model_{ts}.json",
                 mime="application/json",
             )
+            dl3.download_button(
+                "Download run script (.py)",
+                data=_generate_run_script(),
+                file_name=f"pychannelab_run_{ts}.py",
+                mime="text/plain",
+                help=(
+                    "Self-contained Python script that reproduces this optimisation, "
+                    "saves plots (HTML + PNG), and writes a Markdown report."
+                ),
+            )
 
         st.divider()
 
-        st.subheader(f"Experimental vs Simulated  ({label} parameters)")
+        # ── Simulate once, reuse for figure + comparison table ────────────
         with st.spinner("Simulating…"):
-            fig = _comparison_figure(params)
+            sim_data = _simulate_all(params)
+
+        st.subheader(f"Experimental vs Simulated  ({label} parameters)")
+        fig = _comparison_figure(params, _sim_data=sim_data)
         st.plotly_chart(fig, width="stretch")
+
+        # ── Phenomenological curve-fit comparison table ───────────────────
+        if ss.exp_data:
+            st.subheader("Phenomenological curve-fit comparison")
+            st.caption(
+                "Fits of the selected function (chosen in the Data tab) to "
+                "experimental data and to the simulated model output."
+            )
+            with st.spinner("Fitting curves…"):
+                cmp_df = _curve_fit_comparison_table(sim_data)
+            if not cmp_df.empty:
+                st.dataframe(cmp_df, hide_index=True, width='stretch')
+            else:
+                st.info("Load experimental data and select fit functions in the Data tab.")
