@@ -263,7 +263,7 @@ class DynamicModel:
         """
         Build the generator matrix Q at voltage V.
 
-        Q[j, i] = rate(i→j) for i≠j; Q[i, i] = -(sum of outgoing rates from i)
+        Q[j, i] = rate(i→j) for i≠j; Q[i, i] = −(sum of outgoing rates from i)
         """
         ns = {**self._base_ns, "V": V}
         n = self.defn.n_states
@@ -401,5 +401,5 @@ def make_11state_preset() -> MSMDefinition:
 
 
 PRESETS = {
-    "11-state Kv channel (C0-C4, I0-I4, O)": make_11state_preset,
+    "11-state Kv channel (C0–C4, I0–I4, O)": make_11state_preset,
 }
