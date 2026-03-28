@@ -22,8 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-# After installation, this command launches the Streamlit GUI.
-pychannelab = "pychannel_lab._cli:main"
+pychannelab = "pychannel_lab.cli:main"
 
 [project.optional-dependencies]
 docs = [
