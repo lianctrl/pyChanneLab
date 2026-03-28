@@ -1,7 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv.extra-build-dependencies]
+pychannelab = ["setuptools>=68"]
+
 [project]
 name = "pychannelab"
-version = "0.2.0"
-description = "Ion channel Markov State Model fitting — Streamlit GUI"
+version = "0.1.0"
+description = "Ion channel Markov State Model fitting"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,6 +18,30 @@ dependencies = [
     "streamlit>=1.35",
     "plotly>=5.20",
     "torch>=2.2",
-    "black>=26.3.1",
-    "matplotlib>=3.10.8",
+    "matplotlib>=3.10",
 ]
+
+[project.scripts]
+# After installation, this command launches the Streamlit GUI.
+pychannelab = "pychannel_lab._cli:main"
+
+[project.optional-dependencies]
+docs = [
+    "sphinx>=8.0",
+    "sphinx-rtd-theme>=3.0",
+    "sphinxcontrib-napoleon>=0.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "sphinx>=8.0",
+    "sphinx-rtd-theme>=3.0",
+    "sphinxcontrib-napoleon>=0.7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
