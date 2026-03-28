@@ -57,6 +57,7 @@ class ParamSpec:
     initial_value: float
     lower_bound: float
     upper_bound: float
+    frozen: bool = False
 
 
 @dataclass
@@ -92,6 +93,43 @@ class MSMDefinition:
     @property
     def bounds(self) -> tuple:
         return tuple((p.lower_bound, p.upper_bound) for p in self.parameters)
+
+    @property
+    def n_params(self) -> int:
+        return len(self.parameters)
+
+    @property
+    def frozen_indices(self) -> list:
+        """Indices of frozen parameters."""
+        return [i for i, p in enumerate(self.parameters) if p.frozen]
+
+    @property
+    def free_bounds(self) -> tuple:
+        """Bounds for non-frozen parameters only."""
+        return tuple(
+            (p.lower_bound, p.upper_bound)
+            for p in self.parameters
+            if not p.frozen
+        )
+
+    @property
+    def free_initial_guess(self) -> np.ndarray:
+        """Initial values for non-frozen parameters only."""
+        return np.array(
+            [p.initial_value for p in self.parameters if not p.frozen], dtype=float
+        )
+
+    def expand_params(self, free_x: np.ndarray) -> np.ndarray:
+        """Map a free-param vector back to a full-length param vector.
+
+        Frozen parameters are filled in at their ``initial_value``; free
+        parameters are taken from *free_x* in order.
+        """
+        full = np.empty(len(self.parameters), dtype=float)
+        free_iter = iter(free_x)
+        for i, p in enumerate(self.parameters):
+            full[i] = p.initial_value if p.frozen else next(free_iter)
+        return full
 
     @property
     def default_initial_conditions(self) -> np.ndarray:
@@ -401,5 +439,5 @@ def make_11state_preset() -> MSMDefinition:
 
 
 PRESETS = {
-    "11-state Kv channel (C0–C4, I0–I4, O)": make_11state_preset,
+    "11-state Kv channel (C0-C4, I0-I4, O)": make_11state_preset,
 }
