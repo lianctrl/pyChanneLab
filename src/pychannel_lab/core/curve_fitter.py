@@ -86,18 +86,47 @@ def _initial_guess(x: np.ndarray, y: np.ndarray, curve_type: str) -> List[float]
         return [y_range, y_min, 1.0 / max(x_range, 1e-9), x_mid]
 
 
+def _make_constrained(fn, param_names: List[str], fixed: dict):
+    """
+    Return a wrapper function with *fixed* parameters baked in.
+    *fixed* maps param_name → fixed_value.
+    The wrapper accepts only the free parameters as positional args.
+    """
+    free_names = [n for n in param_names if n not in fixed]
+
+    def wrapper(x, *free_args):
+        all_args = []
+        fi = 0
+        for name in param_names:
+            if name in fixed:
+                all_args.append(fixed[name])
+            else:
+                all_args.append(free_args[fi])
+                fi += 1
+        return fn(x, *all_args)
+
+    return wrapper, free_names
+
+
 def fit_curve(
     x: np.ndarray,
     y: np.ndarray,
     curve_type: str,
+    fix_baseline: bool = False,
+    fix_amplitude: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, bool]:
     """
     Fit *curve_type* to data (x, y).
 
+    Parameters
+    ----------
+    fix_baseline  : if True, fix the additive offset (C / B) to 0.
+    fix_amplitude : if True, fix the multiplicative amplitude (a / A) to 1.
+
     Returns
     -------
-    popt    : best-fit parameters
-    perr    : 1-σ uncertainties (sqrt of covariance diagonal)
+    popt    : best-fit parameters (full length, fixed params at their fixed value)
+    perr    : 1-σ uncertainties (0 for fixed params, nan where not computable)
     success : True if curve_fit converged
     """
     fn, _, param_names = CURVE_FUNCTIONS[curve_type]
@@ -109,18 +138,49 @@ def fit_curve(
     n_params = len(param_names)
     nan_arr = np.full(n_params, np.nan)
 
-    if len(x) < n_params:
+    # Determine which parameters are fixed
+    fixed: dict = {}
+    if fix_amplitude:
+        # First param is amplitude: 'a' for exp functions, 'A' for sigmoids
+        fixed[param_names[0]] = 1.0
+    if fix_baseline:
+        if "C" in param_names:
+            fixed["C"] = 0.0
+        elif "B" in param_names:
+            fixed["B"] = 0.0
+
+    free_names = [n for n in param_names if n not in fixed]
+    n_free = len(free_names)
+
+    if len(x) < max(n_free, 1):
         return nan_arr.copy(), nan_arr.copy(), False
 
-    p0 = _initial_guess(x, y, curve_type)
+    # Build fitting function (possibly constrained)
+    if fixed:
+        fit_fn, _ = _make_constrained(fn, param_names, fixed)
+        p0_all = _initial_guess(x, y, curve_type)
+        free_indices = [i for i, n in enumerate(param_names) if n not in fixed]
+        p0_free = [p0_all[i] for i in free_indices]
+    else:
+        fit_fn = fn
+        p0_free = _initial_guess(x, y, curve_type)
+        free_indices = list(range(n_params))
 
     try:
-        popt, pcov = curve_fit(fn, x, y, p0=p0, maxfev=20000)
-        diag = np.diag(pcov)
-        perr = np.where(diag >= 0, np.sqrt(diag), np.nan)
-        return popt, perr, True
+        popt_free, pcov_free = curve_fit(fit_fn, x, y, p0=p0_free, maxfev=20000)
+        diag = np.diag(pcov_free)
+        perr_free = np.where(diag >= 0, np.sqrt(diag), np.nan)
     except Exception:
         return nan_arr.copy(), nan_arr.copy(), False
+
+    # Reconstruct full-length popt / perr (fixed params at their fixed values)
+    popt = np.array([fixed.get(n, np.nan) for n in param_names], dtype=float)
+    perr = np.zeros(n_params, dtype=float)
+    for fi, idx in enumerate(free_indices):
+        popt[idx] = popt_free[fi]
+        perr[idx] = perr_free[fi]
+
+    return popt, perr, True
 
 
 def eval_curve(x: np.ndarray, popt: np.ndarray, curve_type: str) -> np.ndarray:
