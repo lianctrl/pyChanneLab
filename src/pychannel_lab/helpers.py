@@ -1,8 +1,3 @@
-"""
-Shared constants, helper functions, and run-script generator for pyChanneLab.
-All tab modules import from here so the main app.py stays thin.
-"""
-
 import math
 from datetime import datetime
 
@@ -29,7 +24,6 @@ from core.curve_fitter import (
     PROTOCOL_CURVE_DEFAULTS,
 )
 
-# ── Protocol metadata ──────────────────────────────────────────────────────────
 PROTOCOL_KEYS = ["activation", "inactivation", "cs_inactivation", "recovery"]
 
 PROTOCOL_LABELS = {
@@ -54,8 +48,6 @@ PROTOCOL_Y_LABELS = {
 TYPE_COLORS = {"closed": "#4878d0", "inactivated": "#ee854a", "open": "#6acc65"}
 TYPE_LABELS = {"closed": "Closed", "inactivated": "Inactivated", "open": "Open"}
 
-
-# ── Session-state helpers ──────────────────────────────────────────────────────
 
 
 def _ic() -> np.ndarray:
@@ -364,9 +356,6 @@ def _curve_fit_comparison_table(sim_data: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ── Run-script generator ───────────────────────────────────────────────────────
-
-
 def generate_run_script() -> str:
     """
     Return a self-contained Python script that reproduces the current optimisation.
@@ -415,7 +404,6 @@ def generate_run_script() -> str:
     def w(line: str = "") -> None:
         L.append(line)
 
-    # ── Header ────────────────────────────────────────────────────────────────
     w("#!/usr/bin/env python3")
     w(f'"""')
     w(f"pyChanneLab auto-generated run script.")
@@ -453,14 +441,12 @@ def generate_run_script() -> str:
     w("OUT_DIR.mkdir(exist_ok=True)")
     w()
 
-    # ── MSM definition ────────────────────────────────────────────────────────
     msm_json_str = ss.msm_def.to_json()
     w("# ── MSM definition (embedded) ──────────────────────────────────────────")
     w(f"_MSM_JSON = {repr(msm_json_str)}")
     w("msm_def = MSMDefinition.from_json(_MSM_JSON)")
     w()
 
-    # ── Protocol configs ──────────────────────────────────────────────────────
     w("# ── protocol configs ───────────────────────────────────────────────────")
     w(f"act_cfg   = ActivationConfig({cfg_kwargs(ss.act_cfg)})")
     w(f"inact_cfg = InactivationConfig({cfg_kwargs(ss.inact_cfg)})")
@@ -472,7 +458,6 @@ def generate_run_script() -> str:
     w(f"initial_state = np.array({ic_arr.tolist()})")
     w()
 
-    # ── Experimental data ─────────────────────────────────────────────────────
     w("# ── experimental data (embedded) ──────────────────────────────────────")
     w("exp_data = {")
     for line in exp_lines:
@@ -480,7 +465,6 @@ def generate_run_script() -> str:
     w("}")
     w()
 
-    # ── Optimisation weights ──────────────────────────────────────────────────
     w("# ── optimisation weights ───────────────────────────────────────────────")
     w("weights = {")
     for pk, wt in ss.opt_weights.items():
@@ -488,7 +472,6 @@ def generate_run_script() -> str:
     w("}")
     w()
 
-    # ── Curve-fit types ───────────────────────────────────────────────────────
     w("# ── curve-fit function per protocol ────────────────────────────────────")
     w("curve_fit_types = {")
     for pk in PROTOCOL_KEYS:
@@ -497,7 +480,6 @@ def generate_run_script() -> str:
     w("}")
     w()
 
-    # ── Display labels ────────────────────────────────────────────────────────
     w('PROTOCOL_KEYS = ["activation", "inactivation", "cs_inactivation", "recovery"]')
     w("PROTOCOL_LABELS = {")
     for pk, lbl in PROTOCOL_LABELS.items():
@@ -513,7 +495,6 @@ def generate_run_script() -> str:
     w("}")
     w()
 
-    # ── Optimisation hyperparameters (from GUI at export time) ────────────────
     w(
         "# ── optimisation hyperparameters (as set in the GUI when script was exported) ─"
     )
@@ -528,7 +509,6 @@ def generate_run_script() -> str:
     w(f"N_PEAK_STEPS = {_n_peak_steps}")
     w()
 
-    # ── Step 1: optimisation (Torch pipeline, scipy fallback) ─────────────────
     w("# " + "─" * 72)
     w("# STEP 1  Optimisation  (DE → Adam → L-BFGS via TorchPipelineOptimizer)")
     w("#         Falls back to scipy differential_evolution + L-BFGS-B if PyTorch")
@@ -609,7 +589,6 @@ def generate_run_script() -> str:
     w('print(f"Saved: {_params_path}")')
     w()
 
-    # ── Step 2: simulate ──────────────────────────────────────────────────────
     w("# " + "─" * 72)
     w("# STEP 2  Simulate with fitted parameters")
     w("# " + "─" * 72)
@@ -633,7 +612,6 @@ def generate_run_script() -> str:
     w("}")
     w()
 
-    # ── Step 3: AIC/BIC ───────────────────────────────────────────────────────
     w("# " + "─" * 72)
     w("# STEP 3  AIC / BIC")
     w("# " + "─" * 72)
@@ -644,7 +622,6 @@ def generate_run_script() -> str:
     )
     w()
 
-    # ── Step 4: curve fits ────────────────────────────────────────────────────
     w("# " + "─" * 72)
     w("# STEP 4  Phenomenological curve fits")
     w("# " + "─" * 72)
@@ -660,7 +637,6 @@ def generate_run_script() -> str:
     w("    curve_fit_results[pk] = entry")
     w()
 
-    # ── Step 5: plots ─────────────────────────────────────────────────────────
     w("# " + "─" * 72)
     w("# STEP 5  Save comparison plots")
     w("# " + "─" * 72)
@@ -748,7 +724,6 @@ def generate_run_script() -> str:
     w('    print(f"matplotlib plot skipped: {_e}")')
     w()
 
-    # ── Step 6: Markdown report ───────────────────────────────────────────────
     w("# " + "─" * 72)
     w("# STEP 6  Markdown report")
     w("# " + "─" * 72)

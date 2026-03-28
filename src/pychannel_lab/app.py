@@ -1,10 +1,3 @@
-"""
-pyChanneLab — Streamlit GUI for ion-channel MSM fitting.
-
-Run with:
-    streamlit run app.py
-"""
-
 import sys
 from pathlib import Path
 

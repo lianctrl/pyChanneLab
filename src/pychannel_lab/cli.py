@@ -1,11 +1,3 @@
-"""
-Command-line entry point for pyChanneLab.
-
-Usage (after installing the package):
-    pychannelab          # launch Streamlit GUI
-    pychannelab --help   # show Streamlit run options
-"""
-
 import subprocess
 import sys
 from pathlib import Path
