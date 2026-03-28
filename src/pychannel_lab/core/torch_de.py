@@ -45,7 +45,6 @@ from core.torch_optimizer import (
     TorchParameterOptimizer,
 )
 
-
 # ─── batched Q-matrix builders ────────────────────────────────────────────────
 
 
@@ -79,20 +78,34 @@ def build_Q_11state_batch(params: torch.Tensor, V: float) -> torch.Tensor:
     # Order must match _TRANSITIONS_11 in torch_simulator.py (28 entries)
     rates = torch.stack(
         [
-            4 * alpha, beta,           # C0 ↔ C1
-            3 * alpha, 2 * beta,       # C1 ↔ C2
-            2 * alpha, 3 * beta,       # C2 ↔ C3
-            alpha, 4 * beta,           # C3 ↔ C4
-            4 * alpha / f, beta * f,   # I0 ↔ I1
-            3 * alpha / f, 2 * beta * f,  # I1 ↔ I2
-            2 * alpha / f, 3 * beta * f,  # I2 ↔ I3
-            alpha / f, 4 * beta * f,   # I3 ↔ I4
-            kCI * f ** 4, kIC / f ** 4,  # C0 ↔ I0
-            kCI * f ** 3, kIC / f ** 3,  # C1 ↔ I1
-            kCI * f ** 2, kIC / f ** 2,  # C2 ↔ I2
-            kCI * f, kIC / f,          # C3 ↔ I3
-            kCI, kIC,                  # C4 ↔ I4
-            k_CO, k_OC,                # C4 ↔ O
+            4 * alpha,
+            beta,  # C0 ↔ C1
+            3 * alpha,
+            2 * beta,  # C1 ↔ C2
+            2 * alpha,
+            3 * beta,  # C2 ↔ C3
+            alpha,
+            4 * beta,  # C3 ↔ C4
+            4 * alpha / f,
+            beta * f,  # I0 ↔ I1
+            3 * alpha / f,
+            2 * beta * f,  # I1 ↔ I2
+            2 * alpha / f,
+            3 * beta * f,  # I2 ↔ I3
+            alpha / f,
+            4 * beta * f,  # I3 ↔ I4
+            kCI * f**4,
+            kIC / f**4,  # C0 ↔ I0
+            kCI * f**3,
+            kIC / f**3,  # C1 ↔ I1
+            kCI * f**2,
+            kIC / f**2,  # C2 ↔ I2
+            kCI * f,
+            kIC / f,  # C3 ↔ I3
+            kCI,
+            kIC,  # C4 ↔ I4
+            k_CO,
+            k_OC,  # C4 ↔ O
         ],
         dim=1,
     )  # (P, 28)
@@ -315,9 +328,7 @@ class BatchedProtocolSimulator:
 
     # ── per-protocol MSE losses ───────────────────────────────────────────────
 
-    def activation_loss(
-        self, x_data: np.ndarray, y_data: np.ndarray
-    ) -> torch.Tensor:
+    def activation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """Weighted-normalised MSE for all P members. Returns (P,)."""
         cfg = self.act_proto.cfg
         P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
@@ -333,9 +344,7 @@ class BatchedProtocolSimulator:
         target = torch.tensor(y_data, dtype=self.dtype, device=self.device)  # (N_V,)
         return ((norm - target.unsqueeze(1)) ** 2).mean(dim=0)  # (P,)
 
-    def inactivation_loss(
-        self, x_data: np.ndarray, y_data: np.ndarray
-    ) -> torch.Tensor:
+    def inactivation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         cfg = self.inact_proto.cfg
         t_test_dur = max(self.t_total - cfg.t_hold - cfg.t_cond, 1e-3)
         P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
@@ -380,9 +389,7 @@ class BatchedProtocolSimulator:
         target = torch.tensor(y_data, dtype=self.dtype, device=self.device)
         return ((norm - target.unsqueeze(1)) ** 2).mean(dim=0)
 
-    def recovery_loss(
-        self, x_sim: np.ndarray, y_data: np.ndarray
-    ) -> torch.Tensor:
+    def recovery_loss(self, x_sim: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """x_sim: absolute test-pulse start times in seconds."""
         cfg = self.rec_proto.cfg
         P0 = self._prop(self.s0, cfg.v_hold, cfg.t_prep)
@@ -394,9 +401,7 @@ class BatchedProtocolSimulator:
             t_rec_dur = max(float(t_rec_end) - cfg.t_pulse, 0.0)
             t_test_dur = max(self.t_total - float(t_rec_end), 1e-3)
             P_rec = (
-                self._prop(P_inact, cfg.v_hold, t_rec_dur)
-                if t_rec_dur > 0
-                else P_inact
+                self._prop(P_inact, cfg.v_hold, t_rec_dur) if t_rec_dur > 0 else P_inact
             )
             _, g_test = self._prop_peak(P_rec, cfg.v_depo, t_test_dur)
             ratios.append(g_test / g_pre)  # (P,)
@@ -434,9 +439,9 @@ class BatchedProtocolSimulator:
             x, y, _ = active["cs_inactivation"]
             _csi = csi_cfg or CSInactivationConfig()
             x_sim = _csi.t_initial + np.asarray(x) / 1000.0
-            loss = loss + weights.get("cs_inactivation", 2.0) * self.cs_inactivation_loss(
-                x_sim, np.asarray(y)
-            )
+            loss = loss + weights.get(
+                "cs_inactivation", 2.0
+            ) * self.cs_inactivation_loss(x_sim, np.asarray(y))
 
         if "recovery" in active:
             x, y, _ = active["recovery"]
@@ -504,7 +509,7 @@ class TorchDEOptimizer:
         self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
     ) -> torch.Tensor:
         """Evaluate (P,) fitness values for all members in the raw population."""
-        params_free = _from_raw_batch(raw, lb, ub)          # (P, n_free)
+        params_free = _from_raw_batch(raw, lb, ub)  # (P, n_free)
         params_full = _expand_batch(params_free, self._msm_def)  # (P, n_full)
         sim = BatchedProtocolSimulator(
             params_full,
@@ -698,6 +703,7 @@ class TorchPipelineOptimizer:
                 raise ValueError("initial_params must be provided when skip_de=True")
             best_free = np.asarray(initial_params, dtype=float)
         else:
+
             def _de_cb(iteration: int, cost: float, convergence):
                 de_gen[0] = iteration
                 if progress_callback:

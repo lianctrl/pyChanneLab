@@ -107,9 +107,7 @@ class MSMDefinition:
     def free_bounds(self) -> tuple:
         """Bounds for non-frozen parameters only."""
         return tuple(
-            (p.lower_bound, p.upper_bound)
-            for p in self.parameters
-            if not p.frozen
+            (p.lower_bound, p.upper_bound) for p in self.parameters if not p.frozen
         )
 
     @property

@@ -26,8 +26,8 @@ from core.msm_builder import (
     TransitionSpec,
 )
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def make_2state_msm(k_CO: float = 4.0, k_OC: float = 1.0) -> MSMDefinition:
     """Return a minimal 2-state MSMDefinition with constant (voltage-independent) rates."""
@@ -41,13 +41,18 @@ def make_2state_msm(k_CO: float = 4.0, k_OC: float = 1.0) -> MSMDefinition:
             TransitionSpec(from_state="O", to_state="C", rate_expr="k_OC"),
         ],
         parameters=[
-            ParamSpec(name="k_CO", initial_value=k_CO, lower_bound=0.01, upper_bound=100.0),
-            ParamSpec(name="k_OC", initial_value=k_OC, lower_bound=0.01, upper_bound=100.0),
+            ParamSpec(
+                name="k_CO", initial_value=k_CO, lower_bound=0.01, upper_bound=100.0
+            ),
+            ParamSpec(
+                name="k_OC", initial_value=k_OC, lower_bound=0.01, upper_bound=100.0
+            ),
         ],
     )
 
 
 # ── MSMDefinition construction ────────────────────────────────────────────────
+
 
 class TestMSMDefinition:
 
@@ -84,7 +89,7 @@ class TestMSMDefinition:
         msm = MSMDefinition(
             states=[StateSpec("C", "closed"), StateSpec("O", "open")],
             transitions=[
-                TransitionSpec("C", "X", "k_CO"),   # 'X' does not exist
+                TransitionSpec("C", "X", "k_CO"),  # 'X' does not exist
                 TransitionSpec("O", "C", "k_OC"),
             ],
             parameters=[
@@ -98,7 +103,10 @@ class TestMSMDefinition:
     def test_validate_no_open_state(self):
         msm = MSMDefinition(
             states=[StateSpec("A", "closed"), StateSpec("B", "closed")],
-            transitions=[TransitionSpec("A", "B", "k_AB"), TransitionSpec("B", "A", "k_BA")],
+            transitions=[
+                TransitionSpec("A", "B", "k_AB"),
+                TransitionSpec("B", "A", "k_BA"),
+            ],
             parameters=[
                 ParamSpec("k_AB", 1.0, 0.0, 10.0),
                 ParamSpec("k_BA", 1.0, 0.0, 10.0),
@@ -121,6 +129,7 @@ class TestMSMDefinition:
 
 
 # ── Frozen-parameter handling ─────────────────────────────────────────────────
+
 
 class TestFrozenParams:
 
@@ -151,17 +160,20 @@ class TestFrozenParams:
                 ParamSpec("k_OC", 1.0, 0.01, 100.0, frozen=False),
             ],
         )
-        free = np.array([2.5])           # only k_OC
+        free = np.array([2.5])  # only k_OC
         full = msm.expand_params(free)
-        assert full[0] == pytest.approx(4.0)   # frozen k_CO
-        assert full[1] == pytest.approx(2.5)   # free k_OC
+        assert full[0] == pytest.approx(4.0)  # frozen k_CO
+        assert full[1] == pytest.approx(2.5)  # free k_OC
 
 
 # ── Q-matrix structure ────────────────────────────────────────────────────────
 
+
 class TestQMatrix:
 
-    def _build_Q(self, k_CO: float = 4.0, k_OC: float = 1.0, V: float = 0.0) -> np.ndarray:
+    def _build_Q(
+        self, k_CO: float = 4.0, k_OC: float = 1.0, V: float = 0.0
+    ) -> np.ndarray:
         msm = make_2state_msm(k_CO, k_OC)
         model = DynamicModel(msm, np.array([k_CO, k_OC]))
         return model.build_Q(V)
@@ -198,25 +210,26 @@ class TestQMatrix:
 
     def test_Q_constant_rate_voltage_independent(self):
         """Rates with no V-dependence should be the same at any voltage."""
-        Q0  = self._build_Q(V=0.0)
+        Q0 = self._build_Q(V=0.0)
         Q50 = self._build_Q(V=50.0)
         np.testing.assert_allclose(Q0, Q50, atol=1e-12)
 
 
 # ── Serialisation ─────────────────────────────────────────────────────────────
 
+
 class TestSerialisation:
 
     def test_round_trip_json(self):
         msm = make_2state_msm(k_CO=3.0, k_OC=2.0)
         restored = MSMDefinition.from_json(msm.to_json())
-        assert restored.state_names  == msm.state_names
-        assert restored.param_names  == msm.param_names
+        assert restored.state_names == msm.state_names
+        assert restored.param_names == msm.param_names
         np.testing.assert_allclose(restored.initial_guess, msm.initial_guess)
 
     def test_round_trip_dict(self):
         msm = make_2state_msm()
         restored = MSMDefinition.from_dict(msm.to_dict())
-        assert len(restored.states)      == len(msm.states)
+        assert len(restored.states) == len(msm.states)
         assert len(restored.transitions) == len(msm.transitions)
-        assert len(restored.parameters)  == len(msm.parameters)
+        assert len(restored.parameters) == len(msm.parameters)

@@ -1,4 +1,5 @@
 """Tab 6 — Results and comparison."""
+
 import json
 import math
 from datetime import datetime
@@ -20,25 +21,26 @@ def render() -> None:
     st.subheader("Fitted parameters")
     rows = []
     for i, pspec in enumerate(ss.msm_def.parameters):
-        init_v  = float(pspec.initial_value)
+        init_v = float(pspec.initial_value)
         final_v = float(ss.fitted_params[i])
-        chg     = (final_v - init_v) / init_v * 100 if init_v != 0 else float("nan")
-        rows.append({
-            "Parameter":  pspec.name,
-            "Initial":    round(init_v, 6),
-            "Fitted":     round(final_v, 6),
-            "Change (%)": round(chg, 2),
-            "Bounds":     f"[{pspec.lower_bound}, {pspec.upper_bound}]",
-        })
+        chg = (final_v - init_v) / init_v * 100 if init_v != 0 else float("nan")
+        rows.append(
+            {
+                "Parameter": pspec.name,
+                "Initial": round(init_v, 6),
+                "Fitted": round(final_v, 6),
+                "Change (%)": round(chg, 2),
+                "Bounds": f"[{pspec.lower_bound}, {pspec.upper_bound}]",
+            }
+        )
     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dict = {
-        "timestamp":  ts,
+        "timestamp": ts,
         "final_cost": float(ss.opt_result.fun),
         "parameters": {
-            p.name: float(v)
-            for p, v in zip(ss.msm_def.parameters, ss.fitted_params)
+            p.name: float(v) for p, v in zip(ss.msm_def.parameters, ss.fitted_params)
         },
         "model": ss.msm_def.to_dict(),
     }
@@ -52,9 +54,9 @@ def render() -> None:
         st.subheader("Model information criteria (AIC / BIC)")
         ab = compute_aic_bic(ss.fitted_params, ss.exp_data, sim_data)
         _ca, _cb, _cc, _cd, _ce = st.columns(5)
-        _ca.metric("AIC",      f"{ab['AIC']:.2f}" if not math.isnan(ab["AIC"]) else "—")
-        _cb.metric("BIC",      f"{ab['BIC']:.2f}" if not math.isnan(ab["BIC"]) else "—")
-        _cc.metric("RSS",      f"{ab['RSS']:.4g}")
+        _ca.metric("AIC", f"{ab['AIC']:.2f}" if not math.isnan(ab["AIC"]) else "—")
+        _cb.metric("BIC", f"{ab['BIC']:.2f}" if not math.isnan(ab["BIC"]) else "—")
+        _cc.metric("RSS", f"{ab['RSS']:.4g}")
         _cd.metric("n points", int(ab["n_points"]))
         _ce.metric("k params", int(ab["k_params"]))
         st.caption(
@@ -66,7 +68,9 @@ def render() -> None:
 
     # ── Experimental vs Simulated figure ──────────────────────────────────────
     st.subheader("Experimental vs Simulated (fitted parameters)")
-    st.plotly_chart(_comparison_figure(ss.fitted_params, _sim_data=sim_data), width="stretch")
+    st.plotly_chart(
+        _comparison_figure(ss.fitted_params, _sim_data=sim_data), width="stretch"
+    )
 
     # ── Phenomenological curve-fit comparison ──────────────────────────────────
     if ss.exp_data:

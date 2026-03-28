@@ -1,4 +1,5 @@
 """Tab 4 — Preview / Sanity Check."""
+
 import pandas as pd
 import streamlit as st
 
@@ -19,11 +20,13 @@ def render() -> None:
     st.subheader("Initial parameters")
     _rows_init = []
     for pspec in ss.msm_def.parameters:
-        _rows_init.append({
-            "Parameter": pspec.name,
-            "Value":     round(float(pspec.initial_value), 6),
-            "Bounds":    f"[{pspec.lower_bound}, {pspec.upper_bound}]",
-        })
+        _rows_init.append(
+            {
+                "Parameter": pspec.name,
+                "Value": round(float(pspec.initial_value), 6),
+                "Bounds": f"[{pspec.lower_bound}, {pspec.upper_bound}]",
+            }
+        )
     st.dataframe(pd.DataFrame(_rows_init), hide_index=True, width="stretch")
 
     st.divider()
@@ -33,12 +36,14 @@ def render() -> None:
 
     if st.button("▶ Run preview simulation", key="btn_preview_sim"):
         with st.spinner("Simulating with initial parameters…"):
-            ss["_preview_sim"]        = _simulate_all(init_params)
+            ss["_preview_sim"] = _simulate_all(init_params)
             ss["_preview_sim_params"] = init_params.tolist()
 
     _prev_sim = ss.get("_preview_sim")
     if _prev_sim is not None:
-        st.plotly_chart(_comparison_figure(init_params, _sim_data=_prev_sim), width="stretch")
+        st.plotly_chart(
+            _comparison_figure(init_params, _sim_data=_prev_sim), width="stretch"
+        )
 
         st.divider()
         st.subheader("Phenomenological curve-fit parameters (initial)")

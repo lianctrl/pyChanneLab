@@ -52,17 +52,20 @@ import torch
 from core.torch_optimizer import TorchParameterOptimizer
 from core.torch_de import TorchPipelineOptimizer
 
-
 # ── toy bimodal cost ─────────────────────────────────────────────────────────
+
 
 class _TorchCostAdapter:
     """Wraps a plain callable in the full TorchCostFunction interface."""
+
     def __init__(self, fn, device=None, dtype=torch.float64):
-        self._fn    = fn
+        self._fn = fn
         self.device = device or torch.device("cpu")
-        self.dtype  = dtype
+        self.dtype = dtype
+
     def __call__(self, p: torch.Tensor) -> torch.Tensor:
         return self._fn(p)
+
     def total_cost_numpy(self, params_np: np.ndarray) -> float:
         p = torch.tensor(params_np, dtype=self.dtype, device=self.device)
         with torch.no_grad():
@@ -77,24 +80,28 @@ def _bimodal(p: torch.Tensor) -> torch.Tensor:
     Local  minimum near x = +2  (f ≈ +0.6)
     """
     x, y = p[0], p[1]
-    return (x ** 2 - 4.0) ** 2 + 0.3 * x + 0.01 * y ** 2
+    return (x**2 - 4.0) ** 2 + 0.3 * x + 0.01 * y**2
 
 
 _BOUNDS = [(-3.0, 3.0), (-3.0, 3.0)]
 
 # ── locate minima analytically with scipy ────────────────────────────────────
 
+
 def _global_minimum_approx():
     """Return approximate global-minimum x value via scipy (sanity reference)."""
     from scipy.optimize import minimize_scalar
+
     res = minimize_scalar(
-        lambda x: (x**2 - 4)**2 + 0.3*x,
-        bounds=(-3.0, 0.0), method="bounded",
+        lambda x: (x**2 - 4) ** 2 + 0.3 * x,
+        bounds=(-3.0, 0.0),
+        method="bounded",
     )
     return res.x, res.fun
 
 
 # ── Test A: Adam+LBFGS trapped at local minimum ───────────────────────────────
+
 
 class TestLocalMinimumTrap:
     """
@@ -112,12 +119,13 @@ class TestLocalMinimumTrap:
             n_lbfgs=100,
         )
         # Should end up near x = +2 (local min), not x = -2 (global min)
-        assert result.x[0] > 0.0, (
-            f"Expected to stay near local min (x>0) but got x={result.x[0]:.3f}"
-        )
+        assert (
+            result.x[0] > 0.0
+        ), f"Expected to stay near local min (x>0) but got x={result.x[0]:.3f}"
 
 
 # ── Test B: DE finds the global minimum ──────────────────────────────────────
+
 
 class TestDEFindsGlobalMinimum:
     """
@@ -155,9 +163,9 @@ class TestDEFindsGlobalMinimum:
                 best_f = result.fun
                 best_x = result.x
 
-        assert best_x[0] == pytest.approx(x_global, abs=0.2), (
-            f"Best x={best_x[0]:.3f} not close to global min x_global={x_global:.3f}"
-        )
+        assert best_x[0] == pytest.approx(
+            x_global, abs=0.2
+        ), f"Best x={best_x[0]:.3f} not close to global min x_global={x_global:.3f}"
         assert best_f < f_global + 0.1
 
     def test_de_pipeline_2state_synthetic(self):
@@ -182,10 +190,7 @@ class TestDEFindsGlobalMinimum:
         from core.simulator import ProtocolSimulator
 
         # True parameters: Boltzmann-shaped G/V centred near 0 mV
-        TRUE = [5.0,   # alpha_0
-                2.0,   # alpha_1
-                5.0,   # beta_0
-                2.0]   # beta_1
+        TRUE = [5.0, 2.0, 5.0, 2.0]  # alpha_0  # alpha_1  # beta_0  # beta_1
 
         # Wrong starting point: slow rates, different balance
         WRONG = [0.5, 0.5, 0.5, 0.5]
@@ -194,22 +199,30 @@ class TestDEFindsGlobalMinimum:
             return MSMDefinition(
                 states=[StateSpec("C", "closed"), StateSpec("O", "open")],
                 transitions=[
-                    TransitionSpec("C", "O", "alpha_0 * exp( alpha_1 * V * EXP_FACTOR)"),
-                    TransitionSpec("O", "C", "beta_0  * exp(-beta_1  * V * EXP_FACTOR)"),
+                    TransitionSpec(
+                        "C", "O", "alpha_0 * exp( alpha_1 * V * EXP_FACTOR)"
+                    ),
+                    TransitionSpec(
+                        "O", "C", "beta_0  * exp(-beta_1  * V * EXP_FACTOR)"
+                    ),
                 ],
                 parameters=[
                     ParamSpec("alpha_0", init[0], 0.01, 200.0),
-                    ParamSpec("alpha_1", init[1], 0.01,   5.0),
-                    ParamSpec("beta_0",  init[2], 0.01, 200.0),
-                    ParamSpec("beta_1",  init[3], 0.01,   5.0),
+                    ParamSpec("alpha_1", init[1], 0.01, 5.0),
+                    ParamSpec("beta_0", init[2], 0.01, 200.0),
+                    ParamSpec("beta_1", init[3], 0.01, 5.0),
                 ],
             )
 
         # Activation protocol covering the activation range
         act_cfg = ActivationConfig(
-            v_hold=-90.0, v_tail=-90.0,
-            v_min=-60.0, v_max=60.0, v_step=20.0,   # 7 voltage points
-            t_hold=0.10, t_test=0.20,
+            v_hold=-90.0,
+            v_tail=-90.0,
+            v_min=-60.0,
+            v_max=60.0,
+            v_step=20.0,  # 7 voltage points
+            t_hold=0.10,
+            t_test=0.20,
         )
         t_total = 0.31
 
@@ -228,15 +241,15 @@ class TestDEFindsGlobalMinimum:
         y_act = sim_true.run_activation()
 
         # Verify the synthetic data is non-trivial (not all 1.0)
-        assert not np.allclose(y_act, y_act[0]), (
-            "Synthetic G/V curve is flat — voltage-dependent rates not working"
-        )
+        assert not np.allclose(
+            y_act, y_act[0]
+        ), "Synthetic G/V curve is flat — voltage-dependent rates not working"
 
         exp_data = {
-            "activation":      (x_act, y_act, None),
-            "inactivation":    None,
+            "activation": (x_act, y_act, None),
+            "inactivation": None,
             "cs_inactivation": None,
-            "recovery":        None,
+            "recovery": None,
         }
 
         # Step 2: optimise from wrong starting point with the full DE pipeline
@@ -288,6 +301,7 @@ class TestDEFindsGlobalMinimum:
 
 # ── Test C: DE vs local search on bimodal — comparison ───────────────────────
 
+
 class TestDEvsLocal:
     """
     Explicit comparison: show that the minimum found by a broad search
@@ -314,6 +328,6 @@ class TestDEvsLocal:
             if r.fun < best_cost:
                 best_cost = r.fun
 
-        assert best_cost < local_result.fun - 0.5, (
-            f"Broad search ({best_cost:.3f}) not better than local ({local_result.fun:.3f})"
-        )
+        assert (
+            best_cost < local_result.fun - 0.5
+        ), f"Broad search ({best_cost:.3f}) not better than local ({local_result.fun:.3f})"

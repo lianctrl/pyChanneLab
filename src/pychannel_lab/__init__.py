@@ -8,4 +8,4 @@ Import the public API from sub-modules as needed:
 """
 
 __version__ = "0.1.0"
-__author__  = "Luca Sagresti"
+__author__ = "Luca Sagresti"
