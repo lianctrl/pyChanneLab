@@ -536,8 +536,8 @@ class TorchDEOptimizer:
         bounds    : [(lb, ub), …]  one per free parameter
         pop_size  : population size P
         maxiter   : number of generations
-        F         : differential weight  (mutation scale, typically 0.5–0.9)
-        CR        : crossover probability (typically 0.7–1.0)
+        F         : differential weight  (mutation scale, typically 0.5-0.9)
+        CR        : crossover probability (typically 0.7-1.0)
 
         Returns
         -------
