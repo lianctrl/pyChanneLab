@@ -95,6 +95,33 @@ class TorchCostFunction:
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
 
+    def _expand_params(self, free_params: torch.Tensor) -> torch.Tensor:
+        """
+        Insert frozen parameter values into a free-param tensor to produce
+        a full-length tensor.  Fully differentiable (uses cat + indexing).
+        Accepts free-length or full-length input; full-length is returned as-is.
+        """
+        if self._msm_def is None or not self._msm_def.frozen_indices:
+            return free_params
+        n_total = self._msm_def.n_params
+        if free_params.shape[0] == n_total:
+            return free_params  # already full
+        parts = []
+        free_cursor = 0
+        for p in self._msm_def.parameters:
+            if p.frozen:
+                parts.append(
+                    torch.tensor(
+                        [p.initial_value],
+                        dtype=free_params.dtype,
+                        device=free_params.device,
+                    )
+                )
+            else:
+                parts.append(free_params[free_cursor : free_cursor + 1])
+                free_cursor += 1
+        return torch.cat(parts)
+
     def _build_sim(self, params: torch.Tensor) -> TorchProtocolSimulator:
         return TorchProtocolSimulator(
             params,
@@ -110,7 +137,7 @@ class TorchCostFunction:
 
     def __call__(self, params: torch.Tensor) -> torch.Tensor:
         """Return weighted MSE as a differentiable scalar."""
-        sim = self._build_sim(params)
+        sim = self._build_sim(self._expand_params(params))
         loss = params.new_zeros(())  # scalar, same device/dtype
         active = {k: v for k, v in self.exp.items() if v is not None}
 
@@ -156,7 +183,7 @@ class TorchCostFunction:
 
     def individual_costs_numpy(self, params_np: np.ndarray) -> dict:
         params = torch.tensor(params_np, dtype=self.dtype, device=self.device)
-        sim = self._build_sim(params)
+        sim = self._build_sim(self._expand_params(params))
         active = {k: v for k, v in self.exp.items() if v is not None}
         costs = {}
 
