@@ -53,7 +53,6 @@ class CostFunction:
         g_k_max: float = None,
         t_total: float = None,
         dt: float = None,
-        solver: str = "ode",
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
@@ -65,9 +64,14 @@ class CostFunction:
         self._g_k_max = g_k_max
         self._t_total = t_total
         self._dt = dt
-        self._solver = solver
 
     # ------------------------------------------------------------------
+
+    def _expand(self, parameters: np.ndarray) -> np.ndarray:
+        """Expand free-parameter vector to full length by inserting frozen values."""
+        if self._msm_def is None or not self._msm_def.frozen_indices:
+            return parameters
+        return self._msm_def.expand_params(parameters)
 
     def _build_sim(self, parameters: np.ndarray) -> ProtocolSimulator:
         kw = dict(
@@ -76,7 +80,6 @@ class CostFunction:
             inact_cfg=self._inact_cfg,
             csi_cfg=self._csi_cfg,
             rec_cfg=self._rec_cfg,
-            solver=self._solver,
         )
         if self._g_k_max is not None:
             kw["g_k_max"] = self._g_k_max
@@ -93,7 +96,7 @@ class CostFunction:
     # ------------------------------------------------------------------
 
     def individual_costs(self, parameters: np.ndarray) -> dict:
-        sim = self._build_sim(parameters)
+        sim = self._build_sim(self._expand(parameters))
         active = {k: v for k, v in self.exp.items() if v is not None}
         costs = {}
 
