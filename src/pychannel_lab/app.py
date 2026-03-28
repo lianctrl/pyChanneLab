@@ -40,7 +40,6 @@ from core.msm_builder import (
     PRESETS,
 )
 from core.simulator import ProtocolSimulator
-from core.optimizer import CostFunction, ParameterOptimizer
 from core.data_loader import load_from_bytes
 from core.curve_fitter import (
     fit_curve,
@@ -55,7 +54,7 @@ from core.curve_fitter import (
 try:
     import torch
     from core.torch_simulator import get_device, preferred_dtype
-    from core.torch_optimizer import TorchCostFunction, TorchParameterOptimizer
+    from core.torch_de import TorchPipelineOptimizer
 
     _TORCH_AVAILABLE = True
     _torch_device = get_device()
@@ -91,9 +90,13 @@ def _init_state():
         "fitted_params": None,
         "opt_costs_initial": None,
         "opt_costs_final": None,
-        "curve_fit_types": {},      # {pk: curve_type_key}
-        "curve_fit_params_exp": {},  # {pk: (popt, perr, ok, cft)}
+        "curve_fit_types": {},        # {pk: curve_type_key}
+        "curve_fix_baseline": {},    # {pk: bool}
+        "curve_fix_amplitude": {},   # {pk: bool}
+        "curve_fit_params_exp": {},  # {pk: (popt, perr, ok, cft, fix_base, fix_amp)}
         "curve_fit_params_sim": {},  # {pk: (popt, perr, ok, cft)}
+        "_preview_sim": None,
+        "_preview_sim_params": None,
         "opt_weights": {
             "activation": 1.0,
             "inactivation": 1.0,
@@ -153,23 +156,6 @@ def _build_sim(params: np.ndarray) -> ProtocolSimulator:
         dt=ss.dt,
         g_k_max=ss.g_k_max,
         initial_state=_ic(),
-        solver=ss.get("solver", "ode"),
-    )
-
-
-def _build_cost() -> CostFunction:
-    return CostFunction(
-        ss.exp_data,
-        weights=ss.opt_weights,
-        msm_def=ss.msm_def,
-        act_cfg=ss.act_cfg,
-        inact_cfg=ss.inact_cfg,
-        csi_cfg=ss.csi_cfg,
-        rec_cfg=ss.rec_cfg,
-        g_k_max=ss.g_k_max,
-        t_total=ss.t_total,
-        dt=ss.dt,
-        solver=ss.get("solver", "ode"),
     )
 
 
@@ -434,7 +420,7 @@ def _curve_fit_comparison_table(sim_data: dict) -> pd.DataFrame:
         # Exp fit (already cached)
         exp_entry = ss.curve_fit_params_exp.get(pk)
         if exp_entry is not None:
-            popt_exp, perr_exp, ok_exp, _ = exp_entry
+            popt_exp, perr_exp, ok_exp = exp_entry[0], exp_entry[1], exp_entry[2]
         else:
             x_e, y_e, _ = ss.exp_data[pk]
             popt_exp, perr_exp, ok_exp = fit_curve(x_e, y_e, cft)
@@ -805,11 +791,12 @@ def _generate_run_script() -> str:
 
 
 # TABS
-tab_builder, tab_proto, tab_data, tab_opt, tab_results = st.tabs(
+tab_builder, tab_proto, tab_data, tab_preview, tab_opt, tab_results = st.tabs(
     [
         "🏗️ MSM Builder",
         "🧪 Protocols",
         "📁 Data",
+        "🔍 Preview",
         "🚀 Optimise",
         "📊 Results",
     ]
@@ -941,6 +928,7 @@ with tab_builder:
                     "initial": p.initial_value,
                     "lower": p.lower_bound,
                     "upper": p.upper_bound,
+                    "freeze": p.frozen,
                 }
                 for p in ss.msm_def.parameters
             ]
@@ -956,6 +944,9 @@ with tab_builder:
                 ),
                 "lower": st.column_config.NumberColumn("Lower bound", format="%.4g"),
                 "upper": st.column_config.NumberColumn("Upper bound", format="%.4g"),
+                "freeze": st.column_config.CheckboxColumn(
+                    "Freeze", help="Exclude this parameter from optimisation"
+                ),
             },
             key="params_editor",
             height=400,
@@ -987,6 +978,7 @@ with tab_builder:
                     initial_value=float(row["initial"]),
                     lower_bound=float(row["lower"]),
                     upper_bound=float(row["upper"]),
+                    frozen=bool(row.get("freeze", False)),
                 )
                 for _, row in edited_params.dropna(subset=["name"]).iterrows()
                 if str(row["name"]).strip()
@@ -1216,6 +1208,7 @@ with tab_data:
                 try:
                     x, y, y_err = load_from_bytes(uploaded.read())
                     ss.exp_data[pk] = (x, y, y_err)
+                    ss.curve_fit_params_exp.pop(pk, None)  # invalidate stale cache
                     st.success(f"Loaded {len(x)} points.")
                 except Exception as exc:
                     st.error(f"Failed to load: {exc}")
@@ -1226,7 +1219,8 @@ with tab_data:
                 # ── curve type selector ───────────────────────────────────
                 cft_default = ss.curve_fit_types.get(pk, PROTOCOL_CURVE_DEFAULTS[pk])
                 cft_keys = list(CURVE_LABELS.keys())
-                cft = st.selectbox(
+                _cft_col, _fix_col = st.columns([3, 2])
+                cft = _cft_col.selectbox(
                     "Fit function",
                     cft_keys,
                     index=cft_keys.index(cft_default),
@@ -1234,10 +1228,35 @@ with tab_data:
                     key=f"cft_{pk}",
                 )
                 ss.curve_fit_types[pk] = cft
+                fix_base = _fix_col.checkbox(
+                    "Fix baseline = 0",
+                    value=ss.curve_fix_baseline.get(pk, False),
+                    key=f"fix_base_{pk}",
+                )
+                fix_amp = _fix_col.checkbox(
+                    "Fix amplitude = 1",
+                    value=ss.curve_fix_amplitude.get(pk, False),
+                    key=f"fix_amp_{pk}",
+                )
+                ss.curve_fix_baseline[pk] = fix_base
+                ss.curve_fix_amplitude[pk] = fix_amp
 
-                # compute fit and cache
-                popt, perr, ok = fit_curve(x, y, cft)
-                ss.curve_fit_params_exp[pk] = (popt, perr, ok, cft)
+                # compute fit and cache — only re-run when inputs changed
+                _cached = ss.curve_fit_params_exp.get(pk)
+                if (
+                    _cached is None
+                    or _cached[3] != cft
+                    or _cached[4] != fix_base
+                    or _cached[5] != fix_amp
+                ):
+                    popt, perr, ok = fit_curve(
+                        x, y, cft,
+                        fix_baseline=fix_base,
+                        fix_amplitude=fix_amp,
+                    )
+                    ss.curve_fit_params_exp[pk] = (popt, perr, ok, cft, fix_base, fix_amp)
+                else:
+                    popt, perr, ok = _cached[0], _cached[1], _cached[2]
 
                 # ── plot: data + fit curve ────────────────────────────────
                 fig = go.Figure()
@@ -1308,7 +1327,56 @@ with tab_data:
     else:
         st.warning("No experimental data loaded yet.")
 
-# TAB 4 — Optimisation
+# TAB 4 — Preview / Sanity Check
+with tab_preview:
+    model_errors_prev = ss.msm_def.validate()
+    if model_errors_prev:
+        st.error("Fix model errors in the MSM Builder tab first.")
+        for e in model_errors_prev:
+            st.write(e)
+    else:
+        init_params = ss.msm_def.initial_guess
+        st.subheader("Initial parameters")
+        _rows_init = []
+        for pspec in ss.msm_def.parameters:
+            _rows_init.append({
+                "Parameter": pspec.name,
+                "Value": round(float(pspec.initial_value), 6),
+                "Bounds": f"[{pspec.lower_bound}, {pspec.upper_bound}]",
+            })
+        st.dataframe(pd.DataFrame(_rows_init), hide_index=True, width="stretch")
+
+        st.divider()
+        st.subheader("Simulated curves with initial parameters")
+        if not ss.exp_data:
+            st.info("Load experimental data in the Data tab to overlay it here.")
+
+        if st.button("▶ Run preview simulation", key="btn_preview_sim"):
+            with st.spinner("Simulating with initial parameters…"):
+                ss["_preview_sim"] = _simulate_all(init_params)
+                ss["_preview_sim_params"] = init_params.tolist()
+
+        _prev_sim = ss.get("_preview_sim")
+        if _prev_sim is not None:
+            _prev_fig = _comparison_figure(init_params, _sim_data=_prev_sim)
+            st.plotly_chart(_prev_fig, width="stretch")
+
+            st.divider()
+            st.subheader("Phenomenological curve-fit parameters (initial)")
+            st.caption(
+                "Fits of the selected function (chosen in the Data tab) to "
+                "experimental data and to the simulated model output with initial parameters."
+            )
+            with st.spinner("Fitting curves…"):
+                _prev_cmp_df = _curve_fit_comparison_table(_prev_sim)
+            if not _prev_cmp_df.empty:
+                st.dataframe(_prev_cmp_df, hide_index=True, width="stretch")
+            else:
+                st.info("Load experimental data in the Data tab to compare fits here.")
+        else:
+            st.info("Click the button above to run the simulation.")
+
+# TAB 5 — Optimisation
 with tab_opt:
     model_errors = ss.msm_def.validate()
     if model_errors:
@@ -1320,85 +1388,102 @@ with tab_opt:
     else:
         st.subheader("Optimisation settings")
 
-        _SCIPY_METHODS = [
-            "Global (Diff. Evolution)",
-            "Local (L-BFGS-B)",
-            "Global then Local",
-        ]
-        _TORCH_LABEL = "PyTorch (Adam → L-BFGS)"
-        _method_options = _SCIPY_METHODS + ([_TORCH_LABEL] if _TORCH_AVAILABLE else [])
-
-        col1, col2, col3 = st.columns(3)
-        method = col1.selectbox("Method", _method_options, key="opt_method")
-
-        use_torch = method == _TORCH_LABEL
-
-        if not use_torch:
-            col1.radio(
-                "Solver",
-                ["ode", "qmatrix"],
-                horizontal=True,
-                key="solver",
-                help=(
-                    "**ode** — scipy odeint (numerical integration). "
-                    "**qmatrix** — matrix exponential P(t+dt)=expm(Q·dt)@P(t), "
-                    "exact for piecewise-constant voltage within each dt step."
-                ),
+        if not _TORCH_AVAILABLE:
+            st.error(
+                "PyTorch is not installed. "
+                "Install it with `pip install torch` to use the optimiser."
             )
+            st.stop()
 
-        if use_torch:
-            _dev_name = str(_torch_device) if _torch_device else "cpu"
-            col1.caption(f"Device: **{_dev_name}**")
-            maxiter = col2.number_input(
-                "Adam steps",
-                value=500,
-                min_value=0,
-                max_value=10000,
-                step=50,
-                key="opt_maxiter",
-            )
-            n_lbfgs = col3.number_input(
-                "L-BFGS steps",
-                value=200,
-                min_value=0,
-                max_value=2000,
-                step=20,
-                key="opt_lbfgs",
-            )
-            col_lr, col_peaks = st.columns(2)
-            adam_lr = col_lr.number_input(
-                "Adam learning rate",
-                value=0.05,
-                min_value=1e-4,
-                max_value=1.0,
-                format="%.4f",
-                key="opt_adam_lr",
-            )
-            n_peak_steps = col_peaks.number_input(
-                "Peak-detection substeps",
+        _dev_name = str(_torch_device) if _torch_device else "cpu"
+        st.caption(f"Device: **{_dev_name}**")
+
+        run_global = st.toggle(
+            "Run global search (Differential Evolution) before local refinement",
+            value=True,
+            key="opt_run_global",
+            help="Disable to skip DE and start Adam → L-BFGS directly from the initial parameter guess.",
+        )
+
+        if run_global:
+            st.markdown("**Differential Evolution (global)**")
+            col1, col2, col3, col4 = st.columns(4)
+            pop_size = col1.number_input(
+                "Population size",
                 value=50,
                 min_value=10,
-                max_value=200,
+                max_value=500,
                 step=10,
-                key="opt_peak_steps",
+                key="opt_pop_size",
+            )
+            de_maxiter = col2.number_input(
+                "DE generations",
+                value=200,
+                min_value=1,
+                max_value=5000,
+                step=10,
+                key="opt_de_maxiter",
+            )
+            de_F = col3.number_input(
+                "Mutation scale F",
+                value=0.8,
+                min_value=0.1,
+                max_value=2.0,
+                format="%.2f",
+                key="opt_de_F",
+            )
+            de_CR = col4.number_input(
+                "Crossover prob. CR",
+                value=0.9,
+                min_value=0.1,
+                max_value=1.0,
+                format="%.2f",
+                key="opt_de_CR",
             )
         else:
-            maxiter = col2.number_input(
-                "Max iterations",
-                value=5000,
-                min_value=10,
-                max_value=50000,
-                step=100,
-                key="opt_maxiter",
-            )
-            workers = col3.number_input(
-                "Workers (-1 = all cores)",
-                value=-1,
-                min_value=-1,
-                max_value=64,
-                step=1,
-                key="opt_workers",
-            )
+            st.info("Skipping DE — local refinement will start from the initial parameter guess.")
+            pop_size = 50
+            de_maxiter = 0
+            de_F = 0.8
+            de_CR = 0.9
+
+        st.markdown("**Adam (warm-up)**")
+        col5, col6 = st.columns(2)
+        n_adam = col5.number_input(
+            "Adam steps",
+            value=500,
+            min_value=0,
+            max_value=10000,
+            step=50,
+            key="opt_n_adam",
+        )
+        adam_lr = col6.number_input(
+            "Learning rate",
+            value=0.05,
+            min_value=1e-4,
+            max_value=1.0,
+            format="%.4f",
+            key="opt_adam_lr",
+        )
+
+        st.markdown("**L-BFGS (refinement)**")
+        col7, col8 = st.columns(2)
+        n_lbfgs = col7.number_input(
+            "L-BFGS steps",
+            value=200,
+            min_value=0,
+            max_value=2000,
+            step=20,
+            key="opt_lbfgs",
+        )
+        n_peak_steps = col8.number_input(
+            "Peak-detection substeps",
+            value=50,
+            min_value=10,
+            max_value=200,
+            step=10,
+            key="opt_peak_steps",
+        )
 
         st.subheader("Protocol weights")
         wc = st.columns(4)
@@ -1433,17 +1518,35 @@ with tab_opt:
 
         st.divider()
 
-        if st.button("Run Optimisation", type="primary", key="run_opt"):
+        # Show frozen parameters (informational)
+        _frozen = [p for p in ss.msm_def.parameters if p.frozen]
+        if _frozen:
+            st.info(
+                "Frozen (fixed) parameters: "
+                + ", ".join(f"**{p.name}** = {p.initial_value:.4g}" for p in _frozen)
+            )
+
+        _btn_col, _dl_col = st.columns([2, 1])
+        _dl_col.download_button(
+            "💾 Export run script (.py)",
+            data=_generate_run_script(),
+            file_name=f"pychannelab_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.py",
+            mime="text/plain",
+            help=(
+                "Self-contained Python script with all current settings (model, protocols, "
+                "data, weights). Run it on a cluster or workstation to reproduce the optimisation."
+            ),
+        )
+
+        if _btn_col.button("▶ Run Optimisation", type="primary", key="run_opt"):
             defn = ss.msm_def
-            bounds = list(defn.bounds)
+            bounds = list(defn.free_bounds)   # only free params
             log: list = []
 
-            if use_torch:
-                _total_iters = int(maxiter) + int(n_lbfgs)
-            elif "Global then Local" in method:
-                _total_iters = int(maxiter) * 2  # rough estimate
-            else:
-                _total_iters = int(maxiter)
+            _de_gens = int(de_maxiter) if run_global else 0
+            _adam_steps = int(n_adam)
+            _lbfgs_steps = int(n_lbfgs)
+            _total_iters = _de_gens + _adam_steps + _lbfgs_steps
 
             _prog = st.progress(0.0, text="Starting…")
             _mc1, _mc2, _mc3 = st.columns(3)
@@ -1460,24 +1563,20 @@ with tab_opt:
                 g = _global_iter[0]
 
                 msg = f"Iter {g:5d} | cost = {cost:.6e}"
-                if convergence is not None:
-                    msg += f" | conv = {convergence:.4f}"
                 log.append(msg)
 
-                # Phase label
-                if use_torch:
-                    phase = "Adam" if iteration <= int(maxiter) else "L-BFGS"
-                elif convergence is not None:
-                    phase = "Global (DE)"
+                # Phase from absolute iteration position
+                if iteration <= _de_gens:
+                    phase = "DE (global)"
+                elif iteration <= _de_gens + _adam_steps:
+                    phase = "Adam"
                 else:
-                    phase = "Local (L-BFGS-B)"
+                    phase = "L-BFGS"
 
-                # Progress bar
-                pct = min(g / max(_total_iters, 1), 1.0)
-                _prog.progress(pct, text=f"{phase}  ·  iter {g} / {_total_iters}")
+                pct = min(iteration / max(_total_iters, 1), 1.0)
+                _prog.progress(pct, text=f"{phase}  ·  iter {iteration} / {_total_iters}")
 
-                # Metric cards
-                _m_iter.metric("Iteration", f"{g:,}")
+                _m_iter.metric("Iteration", f"{iteration:,}")
                 _m_cost.metric("Cost", f"{cost:.4e}")
                 _m_phase.metric("Phase", phase)
 
@@ -1493,68 +1592,41 @@ with tab_opt:
                         y_label="log10(cost)",
                     )
 
-            result = None
+            pipeline = TorchPipelineOptimizer(
+                ss.exp_data,
+                weights=ss.opt_weights,
+                msm_def=defn,
+                act_cfg=ss.act_cfg,
+                inact_cfg=ss.inact_cfg,
+                csi_cfg=ss.csi_cfg,
+                rec_cfg=ss.rec_cfg,
+                g_k_max=ss.g_k_max,
+                t_total=ss.t_total,
+                n_peak_steps=int(n_peak_steps),
+                device=_torch_device,
+                dtype=_torch_dtype,
+            )
+            ss.opt_costs_initial = pipeline.cost_breakdown(defn.free_initial_guess)
 
-            if use_torch:
-                torch_cost = TorchCostFunction(
-                    ss.exp_data,
-                    weights=ss.opt_weights,
-                    msm_def=defn,
-                    act_cfg=ss.act_cfg,
-                    inact_cfg=ss.inact_cfg,
-                    csi_cfg=ss.csi_cfg,
-                    rec_cfg=ss.rec_cfg,
-                    g_k_max=ss.g_k_max,
-                    t_total=ss.t_total,
-                    n_peak_steps=int(n_peak_steps),
-                    device=_torch_device,
-                    dtype=_torch_dtype,
-                )
-                torch_opt = TorchParameterOptimizer(torch_cost)
-                ss.opt_costs_initial = torch_opt.cost_breakdown(defn.initial_guess)
+            result = pipeline.optimize(
+                bounds=bounds,
+                pop_size=int(pop_size),
+                de_maxiter=_de_gens,
+                F=float(de_F),
+                CR=float(de_CR),
+                n_adam=_adam_steps,
+                adam_lr=float(adam_lr),
+                n_lbfgs=_lbfgs_steps,
+                progress_callback=_cb,
+                skip_de=not run_global,
+                initial_params=defn.free_initial_guess if not run_global else None,
+            )
 
-                result = torch_opt.optimize(
-                    initial_guess=defn.initial_guess,
-                    bounds=bounds,
-                    n_adam=int(maxiter),
-                    adam_lr=float(adam_lr),
-                    n_lbfgs=int(n_lbfgs),
-                    progress_callback=_cb,
-                )
-
-                ss.opt_costs_final = torch_opt.cost_breakdown(result.x)
-
-            else:
-                cost_fn = _build_cost()
-                optimizer = ParameterOptimizer(cost_fn)
-                ss.opt_costs_initial = optimizer.cost_breakdown(defn.initial_guess)
-
-                if "Global" in method:
-                    result = optimizer.optimize_global(
-                        bounds=bounds,
-                        maxiter=int(maxiter),
-                        workers=int(workers),
-                        progress_callback=_cb,
-                    )
-                    if "then Local" in method:
-                        log.append("--- Switching to local refinement ---")
-                        result = optimizer.optimize_local(
-                            initial_guess=result.x,
-                            bounds=bounds,
-                            progress_callback=_cb,
-                        )
-                else:
-                    result = optimizer.optimize_local(
-                        initial_guess=defn.initial_guess,
-                        bounds=bounds,
-                        progress_callback=_cb,
-                    )
-
-                ss.opt_costs_final = optimizer.cost_breakdown(result.x)
-
+            ss.opt_costs_final = pipeline.cost_breakdown(result.x)
             _prog.progress(1.0, text="Done")
 
-            ss.fitted_params = result.x
+            # Expand free params → full params (frozen params at their fixed values)
+            ss.fitted_params = defn.expand_params(result.x)
             ss.opt_result = result
             ss.opt_log = log
             st.success(f"Done! Final cost: {result.fun:.6f}")
@@ -1585,97 +1657,63 @@ with tab_opt:
                 with st.expander("Optimisation log (last 200 iterations)"):
                     st.text("\n".join(ss.opt_log[-200:]))
 
-# TAB 5 — Results and comparison
+# TAB 6 — Results and comparison
 with tab_results:
-    if ss.fitted_params is None and not ss.exp_data:
-        st.info("Run the optimisation first, or load data to preview simulations.")
+    if ss.fitted_params is None:
+        st.info("Run the optimisation first to see results here.")
     else:
-        params = (
-            ss.fitted_params
-            if ss.fitted_params is not None
-            else ss.msm_def.initial_guess
-        )
-        label = "fitted" if ss.fitted_params is not None else "initial guess"
-
-        if ss.fitted_params is not None:
-            st.subheader("Fitted parameters")
-            rows = []
-            for i, pspec in enumerate(ss.msm_def.parameters):
-                init_v = float(pspec.initial_value)
-                final_v = float(ss.fitted_params[i])
-                chg = (final_v - init_v) / init_v * 100 if init_v != 0 else float("nan")
-                rows.append(
-                    {
-                        "Parameter": pspec.name,
-                        "Initial": round(init_v, 6),
-                        "Fitted": round(final_v, 6),
-                        "Change (%)": round(chg, 2),
-                        "Bounds": f"[{pspec.lower_bound}, {pspec.upper_bound}]",
-                    }
-                )
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_dict = {
-                "timestamp": ts,
-                "final_cost": float(ss.opt_result.fun),
-                "parameters": {
-                    p.name: float(v)
-                    for p, v in zip(ss.msm_def.parameters, ss.fitted_params)
-                },
-                "model": ss.msm_def.to_dict(),
-            }
-
-            # ── AIC / BIC ─────────────────────────────────────────────────
-            if ss.exp_data:
-                st.subheader("Model information criteria (AIC / BIC)")
-                with st.spinner("Computing AIC/BIC…"):
-                    _ab_sim = _simulate_all(ss.fitted_params)
-                    ab = compute_aic_bic(ss.fitted_params, ss.exp_data, _ab_sim)
-                _ca, _cb, _cc, _cd, _ce = st.columns(5)
-                _ca.metric("AIC", f"{ab['AIC']:.2f}" if not math.isnan(ab["AIC"]) else "—")
-                _cb.metric("BIC", f"{ab['BIC']:.2f}" if not math.isnan(ab["BIC"]) else "—")
-                _cc.metric("RSS", f"{ab['RSS']:.4g}")
-                _cd.metric("n points", int(ab["n_points"]))
-                _ce.metric("k params", int(ab["k_params"]))
-                st.caption(
-                    "Lower AIC/BIC = better model relative to its complexity. "
-                    "Use these scores to compare models with different numbers of states."
-                )
-
-            # ── downloads ─────────────────────────────────────────────────
-            dl1, dl2, dl3 = st.columns(3)
-            dl1.download_button(
-                "Download parameters (JSON)",
-                data=json.dumps(save_dict, indent=2),
-                file_name=f"params_{ts}.json",
-                mime="application/json",
+        st.subheader("Fitted parameters")
+        rows = []
+        for i, pspec in enumerate(ss.msm_def.parameters):
+            init_v = float(pspec.initial_value)
+            final_v = float(ss.fitted_params[i])
+            chg = (final_v - init_v) / init_v * 100 if init_v != 0 else float("nan")
+            rows.append(
+                {
+                    "Parameter": pspec.name,
+                    "Initial": round(init_v, 6),
+                    "Fitted": round(final_v, 6),
+                    "Change (%)": round(chg, 2),
+                    "Bounds": f"[{pspec.lower_bound}, {pspec.upper_bound}]",
+                }
             )
-            dl2.download_button(
-                "Download model definition (JSON)",
-                data=ss.msm_def.to_json(),
-                file_name=f"model_{ts}.json",
-                mime="application/json",
-            )
-            dl3.download_button(
-                "Download run script (.py)",
-                data=_generate_run_script(),
-                file_name=f"pychannelab_run_{ts}.py",
-                mime="text/plain",
-                help=(
-                    "Self-contained Python script that reproduces this optimisation, "
-                    "saves plots (HTML + PNG), and writes a Markdown report."
-                ),
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dict = {
+            "timestamp": ts,
+            "final_cost": float(ss.opt_result.fun),
+            "parameters": {
+                p.name: float(v)
+                for p, v in zip(ss.msm_def.parameters, ss.fitted_params)
+            },
+            "model": ss.msm_def.to_dict(),
+        }
+
+        # ── Simulate once, reuse for figure + AIC/BIC + comparison table ─
+        with st.spinner("Simulating fitted model…"):
+            sim_data = _simulate_all(ss.fitted_params)
+
+        # ── AIC / BIC ─────────────────────────────────────────────────────
+        if ss.exp_data:
+            st.subheader("Model information criteria (AIC / BIC)")
+            ab = compute_aic_bic(ss.fitted_params, ss.exp_data, sim_data)
+            _ca, _cb, _cc, _cd, _ce = st.columns(5)
+            _ca.metric("AIC", f"{ab['AIC']:.2f}" if not math.isnan(ab["AIC"]) else "—")
+            _cb.metric("BIC", f"{ab['BIC']:.2f}" if not math.isnan(ab["BIC"]) else "—")
+            _cc.metric("RSS", f"{ab['RSS']:.4g}")
+            _cd.metric("n points", int(ab["n_points"]))
+            _ce.metric("k params", int(ab["k_params"]))
+            st.caption(
+                "Lower AIC/BIC = better model relative to its complexity. "
+                "Use these scores to compare models with different numbers of states."
             )
 
         st.divider()
 
-        # ── Simulate once, reuse for figure + comparison table ────────────
-        with st.spinner("Simulating…"):
-            sim_data = _simulate_all(params)
-
-        st.subheader(f"Experimental vs Simulated  ({label} parameters)")
-        fig = _comparison_figure(params, _sim_data=sim_data)
+        # ── Experimental vs Simulated comparison figure ───────────────────
+        st.subheader("Experimental vs Simulated (fitted parameters)")
+        fig = _comparison_figure(ss.fitted_params, _sim_data=sim_data)
         st.plotly_chart(fig, width="stretch")
 
         # ── Phenomenological curve-fit comparison table ───────────────────
@@ -1688,6 +1726,21 @@ with tab_results:
             with st.spinner("Fitting curves…"):
                 cmp_df = _curve_fit_comparison_table(sim_data)
             if not cmp_df.empty:
-                st.dataframe(cmp_df, hide_index=True, width='stretch')
-            else:
-                st.info("Load experimental data and select fit functions in the Data tab.")
+                st.dataframe(cmp_df, hide_index=True, width="stretch")
+
+        st.divider()
+
+        # ── downloads ─────────────────────────────────────────────────────
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "Download parameters (JSON)",
+            data=json.dumps(save_dict, indent=2),
+            file_name=f"params_{ts}.json",
+            mime="application/json",
+        )
+        dl2.download_button(
+            "Download model definition (JSON)",
+            data=ss.msm_def.to_json(),
+            file_name=f"model_{ts}.json",
+            mime="application/json",
+        )

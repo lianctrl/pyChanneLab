@@ -1,18 +1,15 @@
 """
-ODE integration and measurement extraction for all four voltage protocols.
+Matrix-exponential simulator for all four voltage-clamp protocols.
 
+P(t + dt) = expm(Q(V) · dt) @ P(t)
+
+Exact for piecewise-constant voltage within each dt step.
 Accepts either:
   - a plain parameter array (uses the hardcoded IonChannelModel for speed)
   - an MSMDefinition  (builds a DynamicModel at run-time, supports any topology)
-
-Two solvers are available (set via the ``solver`` constructor argument):
-  - ``"ode"``      : scipy odeint (classic numerical integration, default)
-  - ``"qmatrix"``  : matrix-exponential propagation — P(t+dt) = expm(Q(V)·dt) @ P(t)
-                     Exact for piecewise-constant voltage within each dt step.
 """
 
 import numpy as np
-from scipy.integrate import odeint
 from scipy.linalg import expm as _matrix_expm
 from typing import Callable, Tuple
 
@@ -32,8 +29,6 @@ from core.protocols import (
     CSInactivationProtocol,
     RecoveryProtocol,
 )
-
-SOLVERS = ("ode", "qmatrix")
 
 
 class ProtocolSimulator:
@@ -56,9 +51,6 @@ class ProtocolSimulator:
     initial_state : array-like, optional
         Initial probability distribution.  Defaults to INITIAL_CONDITIONS
         (11-state) or msm_def.default_initial_conditions.
-    solver : {"ode", "qmatrix"}
-        ``"ode"``     — scipy odeint (default).
-        ``"qmatrix"`` — matrix-exponential step P(t+dt) = expm(Q(V)·dt) @ P(t).
     """
 
     def __init__(
@@ -73,11 +65,7 @@ class ProtocolSimulator:
         dt: float = TIME_PARAMS["dt"],
         g_k_max: float = G_K_MAX,
         initial_state=None,
-        solver: str = "ode",
     ):
-        if solver not in SOLVERS:
-            raise ValueError(f"solver must be one of {SOLVERS}, got {solver!r}")
-        self.solver = solver
         self.params = np.asarray(parameters, dtype=float)
         self.t_total = t_total
         self.dt = dt
@@ -118,33 +106,34 @@ class ProtocolSimulator:
         """Return the generator matrix Q at voltage V (dispatches to model type)."""
         if isinstance(self.model, IonChannelModel):
             return _build_Q_11state(self.params, V)
-        # DynamicModel
         return self.model.build_Q(V)
 
-    def _simulate_qmatrix(
-        self, voltage_func: Callable
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Step-wise matrix-exponential propagation: P(t+dt) = expm(Q(V)·dt) @ P(t)."""
+    def _simulate(self, voltage_func: Callable) -> Tuple[np.ndarray, np.ndarray]:
+        """Step-wise matrix-exponential propagation: P(t+dt) = expm(Q(V)·dt) @ P(t).
+
+        expm(Q(V)·dt) is cached per unique voltage value.  All four protocols are
+        piecewise-constant (2-4 voltage levels per run), so only 2-4 expm calls are
+        needed instead of one per timestep.
+        """
         t = self._time_array()
         dt = self.dt
         P = self.s0.copy()
         states = np.zeros((len(t), len(P)))
         states[0] = P
+
+        _expm_cache: dict = {}
+        prev_V = None
+        mat = None
+
         for k in range(1, len(t)):
             V = voltage_func(t[k - 1])
-            P = _matrix_expm(self._build_Q(V) * dt) @ P
+            if V != prev_V:
+                if V not in _expm_cache:
+                    _expm_cache[V] = _matrix_expm(self._build_Q(V) * dt)
+                mat = _expm_cache[V]
+                prev_V = V
+            P = mat @ P
             states[k] = P
-        return t, states
-
-    def _simulate(self, voltage_func: Callable) -> Tuple[np.ndarray, np.ndarray]:
-        if self.solver == "qmatrix":
-            return self._simulate_qmatrix(voltage_func)
-        t = self._time_array()
-        states = odeint(
-            lambda s, time: self.model.equations(s, time, voltage_func),
-            self.s0,
-            t,
-        )
         return t, states
 
     def _idx(self, t_sec: float) -> int:
