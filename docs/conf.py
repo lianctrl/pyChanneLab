@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "pychannel_lab"))
 
 # ── Project info ──────────────────────────────────────────────────────────────
 project = "pyChanneLab"
-copyright = "2025, Luca Sagresti"
+copyright = "2026, Luca Sagresti"
 author = "Luca Sagresti"
 release = "0.1.0"
 
