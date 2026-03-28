@@ -20,9 +20,8 @@ It provides:
 3. [Installation](#3-installation)
 4. [Running the GUI](#4-running-the-gui)
 5. [Running the optimisation script on HPC](#5-running-the-optimisation-script-on-hpc)
-6. [Project structure](#6-project-structure)
-7. [Running the tests](#7-running-the-tests)
-8. [Building the documentation](#8-building-the-documentation)
+6. [Running the tests](#6-running-the-tests)
+7. [Building the documentation](#7-building-the-documentation)
 
 ---
 
@@ -35,7 +34,7 @@ It provides:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone the repository
-git clone <repo-url>
+git clone https://github.com/lianctrl/pyChanneLab.git
 cd pyChanneLab
 
 # Create a virtual environment and install all dependencies
@@ -63,7 +62,7 @@ uv pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 ```bash
 # Create and activate a conda environment
-conda create -n pychannelab python=3.12 -y
+conda create -n pychannelab python=3.12 
 conda activate pychannelab
 
 # Install PyTorch (choose the right build for your hardware)
@@ -129,9 +128,9 @@ x,y,y_err
 ...
 ```
 
-- `x` — independent variable (voltage in mV, or time in ms)
-- `y` — normalised observable (0–1)
-- `y_err` — standard error (optional)
+- `x` — independent variable of specific protocols (voltage, time, ...)
+- `y` — experimental observable
+- `y_err` — experimental error (optional)
 
 ---
 
@@ -167,54 +166,7 @@ The script writes to `pychannelab_output/`:
 
 ---
 
-## 6. Project structure
-
-```
-pyChanneLab/
-├── src/pychannel_lab/       # main Python package
-│   ├── app.py               # Streamlit entry point (thin orchestrator)
-│   ├── helpers.py           # shared helpers and run-script generator
-│   ├── _cli.py              # `pychannelab` console-script entry point
-│   ├── tabs/                # one module per GUI tab
-│   │   ├── builder.py       # Tab 1 — MSM Builder
-│   │   ├── protocols.py     # Tab 2 — Protocol Setup
-│   │   ├── data.py          # Tab 3 — Data Upload
-│   │   ├── preview.py       # Tab 4 — Preview
-│   │   ├── optimise.py      # Tab 5 — Optimisation
-│   │   └── results.py       # Tab 6 — Results
-│   └── core/                # library modules (importable, no GUI side-effects)
-│       ├── config.py        # physical constants and protocol dataclasses
-│       ├── msm_builder.py   # MSMDefinition, DynamicModel, presets
-│       ├── protocols.py     # voltage-clamp protocol waveform generators
-│       ├── simulator.py     # matrix-exponential ProtocolSimulator (NumPy/SciPy)
-│       ├── optimizer.py     # SciPy DE + L-BFGS-B (CPU fallback)
-│       ├── curve_fitter.py  # phenomenological curve fitting (AIC/BIC)
-│       ├── data_loader.py   # CSV loader
-│       ├── torch_simulator.py  # differentiable TorchProtocolSimulator
-│       ├── torch_optimizer.py  # Adam + L-BFGS via PyTorch autograd
-│       └── torch_de.py         # batched DE + full DE→Adam→L-BFGS pipeline
-├── test/
-│   ├── conftest.py          # sys.path setup for pytest
-│   ├── unit/
-│   │   ├── test_msm_builder.py          # MSM construction and Q-matrix tests
-│   │   ├── test_simulator.py            # analytic 2-state solution check
-│   │   └── test_gradient_optimizers.py  # Adam + L-BFGS on 2-D test functions
-│   └── integration/
-│       └── test_de_global.py            # DE escapes local minimum; 2-state pipeline
-├── docs/                    # Sphinx documentation
-│   ├── conf.py
-│   ├── index.rst
-│   ├── installation.rst
-│   ├── quickstart.rst
-│   └── api/                 # one .rst per core module
-├── examples/
-├── pyproject.toml           # build system, dependencies, entry-points
-└── README.md
-```
-
----
-
-## 7. Running the tests
+## 6. Running the tests
 
 ```bash
 # All tests (unit + integration)
@@ -229,7 +181,7 @@ uv run pytest test/integration/ -v
 
 ---
 
-## 8. Building the documentation
+## 7. Building the documentation
 
 ```bash
 # Build HTML docs (output in docs/_build/html/)
