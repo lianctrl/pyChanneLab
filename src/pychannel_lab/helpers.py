@@ -422,19 +422,15 @@ def generate_run_script() -> str:
     w("from pathlib import Path")
     w("import numpy as np")
     w()
-    w("# --- path setup ----------------------------------------------------------")
-    w("# Place this script alongside app.py (inside pyChanneLab/src/pychannel_lab/)")
-    w("# before running: python pychannelab_run_<ts>.py")
-    w("_HERE = Path(__file__).resolve().parent")
-    w("sys.path.insert(0, str(_HERE))")
-    w()
+    w("# Requires pychannelab installed in the active environment:")
+    w("#   pip install pychannelab   or   uv pip install pychannelab")
     w(
-        "from core.config import ActivationConfig, InactivationConfig, CSInactivationConfig, RecoveryConfig"
+        "from pychannel_lab.core.config import ActivationConfig, InactivationConfig, CSInactivationConfig, RecoveryConfig"
     )
-    w("from core.msm_builder import MSMDefinition")
-    w("from core.simulator import ProtocolSimulator")
+    w("from pychannel_lab.core.msm_builder import MSMDefinition")
+    w("from pychannel_lab.core.simulator import ProtocolSimulator")
     w(
-        "from core.curve_fitter import fit_curve, eval_curve, compute_aic_bic, CURVE_LABELS, CURVE_FUNCTIONS"
+        "from pychannel_lab.core.curve_fitter import fit_curve, eval_curve, compute_aic_bic, CURVE_LABELS, CURVE_FUNCTIONS"
     )
     w()
     w('OUT_DIR = Path("pychannelab_output")')
@@ -568,8 +564,8 @@ def generate_run_script() -> str:
     w()
     w("try:")
     w("    import torch")
-    w("    from core.torch_simulator import get_device, preferred_dtype")
-    w("    from core.torch_de import TorchPipelineOptimizer")
+    w("    from pychannel_lab.core.torch_simulator import get_device, preferred_dtype")
+    w("    from pychannel_lab.core.torch_de import TorchPipelineOptimizer")
     w("    _TORCH = True")
     w("except ImportError:")
     w("    _TORCH = False")
@@ -605,7 +601,7 @@ def generate_run_script() -> str:
     w()
     w("else:")
     w('    _log("PyTorch not available -- falling back to scipy.")')
-    w("    from core.optimizer import CostFunction, ParameterOptimizer")
+    w("    from pychannel_lab.core.optimizer import CostFunction, ParameterOptimizer")
     w("    cost_fn = CostFunction(")
     w("        exp_data, weights=weights, msm_def=msm_def,")
     w("        act_cfg=act_cfg, inact_cfg=inact_cfg, csi_cfg=csi_cfg, rec_cfg=rec_cfg,")
