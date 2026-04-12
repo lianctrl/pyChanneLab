@@ -378,6 +378,7 @@ def generate_run_script() -> str:
     _adam_lr = float(ss.get("opt_adam_lr", 0.05))
     _n_lbfgs = int(ss.get("opt_lbfgs", 200))
     _n_peak_steps = int(ss.get("opt_peak_steps", 50))
+    _reg_lambda = float(ss.get("opt_reg_lambda", 0.0))
 
     def cfg_kwargs(cfg) -> str:
         return ", ".join(
@@ -516,6 +517,7 @@ def generate_run_script() -> str:
     w(f"ADAM_LR      = {_adam_lr}")
     w(f"N_LBFGS      = {_n_lbfgs}")
     w(f"N_PEAK_STEPS = {_n_peak_steps}")
+    w(f"REG_LAMBDA   = {_reg_lambda}")
     w()
 
     # --- Progress callback (written into the generated script) ----------------
@@ -582,6 +584,7 @@ def generate_run_script() -> str:
     w("        g_k_max=g_k_max, t_total=t_total,")
     w("        n_peak_steps=N_PEAK_STEPS,")
     w("        device=device, dtype=dtype,")
+    w("        reg_lambda=REG_LAMBDA,")
     w("    )")
     w("    result = pipeline.optimize(")
     w("        bounds=list(msm_def.free_bounds),")
@@ -606,6 +609,7 @@ def generate_run_script() -> str:
     w("        exp_data, weights=weights, msm_def=msm_def,")
     w("        act_cfg=act_cfg, inact_cfg=inact_cfg, csi_cfg=csi_cfg, rec_cfg=rec_cfg,")
     w("        g_k_max=g_k_max, t_total=t_total, dt=dt,")
+    w("        reg_lambda=REG_LAMBDA,")
     w("    )")
     w("    optimizer = ParameterOptimizer(cost_fn)")
     w("    bounds = list(msm_def.free_bounds)")

@@ -81,9 +81,11 @@ class TorchCostFunction:
         n_peak_steps: int = 50,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
+        self.reg_lambda = reg_lambda
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -173,6 +175,9 @@ class TorchCostFunction:
             pred = sim.run_recovery(x_sim)
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
             loss = loss + self.w.get("recovery", 1.0) * ((pred - target) ** 2).mean()
+
+        if self.reg_lambda > 0.0:
+            loss = loss + self.reg_lambda * (params ** 2).sum()
 
         return loss
 

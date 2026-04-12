@@ -418,8 +418,9 @@ class BatchedProtocolSimulator:
         weights: dict,
         csi_cfg: CSInactivationConfig = None,
         rec_cfg: RecoveryConfig = None,
+        reg_lambda: float = 0.0,
     ) -> torch.Tensor:
-        """Weighted sum of protocol MSEs. Returns (P,)."""
+        """Weighted sum of protocol MSEs plus optional L2 regularization. Returns (P,)."""
         active = {k: v for k, v in exp_data.items() if v is not None}
         loss = torch.zeros(self.P, dtype=self.dtype, device=self.device)
 
@@ -450,6 +451,10 @@ class BatchedProtocolSimulator:
             loss = loss + weights.get("recovery", 2.0) * self.recovery_loss(
                 x_sim, np.asarray(y)
             )
+
+        if reg_lambda > 0.0:
+            # L2 penalty: lambda * sum(theta^2) per population member
+            loss = loss + reg_lambda * (self.params ** 2).sum(dim=1)
 
         return loss
 
@@ -491,6 +496,7 @@ class TorchDEOptimizer:
         n_peak_steps: int = 50,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
     ):
         self.exp = experimental_data
         self.w = weights or dict(self._DEFAULT_WEIGHTS)
@@ -502,6 +508,7 @@ class TorchDEOptimizer:
         self._g_k_max = g_k_max
         self._t_total = t_total
         self._n_peak_steps = n_peak_steps
+        self.reg_lambda = reg_lambda
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
 
@@ -522,7 +529,7 @@ class TorchDEOptimizer:
             t_total=self._t_total,
             n_peak_steps=self._n_peak_steps,
         )
-        return sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg)
+        return sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg, self.reg_lambda)
 
     def optimize(
         self,
@@ -622,6 +629,7 @@ class TorchPipelineOptimizer:
         n_peak_steps: int = 50,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
     ):
         device = device or get_device()
         dtype = dtype or preferred_dtype(device)
@@ -639,6 +647,7 @@ class TorchPipelineOptimizer:
             n_peak_steps=n_peak_steps,
             device=device,
             dtype=dtype,
+            reg_lambda=reg_lambda,
         )
 
         self._de = TorchDEOptimizer(**_common)
@@ -657,6 +666,7 @@ class TorchPipelineOptimizer:
             n_peak_steps=n_peak_steps,
             device=device,
             dtype=dtype,
+            reg_lambda=reg_lambda,
         )
         self._torch_cost = TorchCostFunction(**_local_kw)
         self._local = TorchParameterOptimizer(self._torch_cost)

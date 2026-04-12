@@ -127,6 +127,20 @@ def render() -> None:
         key="opt_peak_steps",
     )
 
+    st.subheader("Regularization")
+    reg_lambda = st.number_input(
+        "L2 regularization λ",
+        value=float(ss.get("opt_reg_lambda", 0.0)),
+        min_value=0.0,
+        format="%.6f",
+        step=1e-5,
+        key="opt_reg_lambda",
+        help=(
+            "Adds λ·Σθ² to the loss. Set to 0 to disable. "
+            "Penalises large parameter values and can improve conditioning."
+        ),
+    )
+
     st.subheader("Protocol weights")
     wc = st.columns(4)
     ss.opt_weights["activation"] = wc[0].number_input(
@@ -247,6 +261,7 @@ def render() -> None:
             n_peak_steps=int(n_peak_steps),
             device=_torch_device,
             dtype=_torch_dtype,
+            reg_lambda=float(reg_lambda),
         )
         ss.opt_costs_initial = pipeline.cost_breakdown(defn.free_initial_guess)
 

@@ -53,9 +53,11 @@ class CostFunction:
         g_k_max: float = None,
         t_total: float = None,
         dt: float = None,
+        reg_lambda: float = 0.0,
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
+        self.reg_lambda = reg_lambda
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -124,7 +126,9 @@ class CostFunction:
 
     def total_cost(self, parameters: np.ndarray) -> float:
         costs = self.individual_costs(parameters)
-        return sum(self.w.get(k, 1.0) * v for k, v in costs.items())
+        data_cost = sum(self.w.get(k, 1.0) * v for k, v in costs.items())
+        reg_cost = self.reg_lambda * float(np.sum(parameters ** 2))
+        return data_cost + reg_cost
 
     def __call__(self, parameters: np.ndarray) -> float:
         return self.total_cost(parameters)
