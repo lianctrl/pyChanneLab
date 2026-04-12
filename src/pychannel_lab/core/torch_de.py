@@ -568,6 +568,7 @@ class TorchDEOptimizer:
 
         with torch.no_grad():
             fitness = self._eval_population(raw, lb, ub)  # (P,)
+        fitness = torch.nan_to_num(fitness, nan=1e6, posinf=1e6)
 
         for gen in range(maxiter):
             # Mutation: DE/rand/1 — three distinct random permutations
@@ -584,6 +585,7 @@ class TorchDEOptimizer:
 
             with torch.no_grad():
                 trial_fitness = self._eval_population(trial, lb, ub)  # (P,)
+            trial_fitness = torch.nan_to_num(trial_fitness, nan=1e6, posinf=1e6)
 
             # Selection: keep trial if it improves fitness
             better = trial_fitness < fitness

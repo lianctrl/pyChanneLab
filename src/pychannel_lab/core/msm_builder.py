@@ -430,7 +430,7 @@ def make_11state_preset() -> MSMDefinition:
         ParamSpec("k_OC_1", 1.0e-2, 0.0, 5.0),
         ParamSpec("k_CI", 94.5, 0.0, 2000.0),
         ParamSpec("k_IC", 0.24, 0.0, 100.0),
-        ParamSpec("f", 0.44, 0.0, 1.0),
+        ParamSpec("f", 0.44, 0.01, 1.0),  # lower > 0: model has kIC/f**4 terms
     ]
 
     return MSMDefinition(states=states, transitions=transitions, parameters=parameters)

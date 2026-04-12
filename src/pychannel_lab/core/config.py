@@ -79,7 +79,7 @@ PARAMETER_BOUNDS = (
     (0.0, 5.0),  # k_OC_1
     (0.0, 2000.0),  # k_CI
     (0.0, 100.0),  # k_IC
-    (0.0, 1.0),  # f
+    (0.01, 1.0),  # f — must be strictly > 0 (model has kIC/f**4 terms)
 )
 
 # Optimisation engine settings
