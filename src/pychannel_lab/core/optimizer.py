@@ -8,13 +8,13 @@ import numpy as np
 from scipy.optimize import differential_evolution, minimize
 from typing import Dict, Callable, Tuple
 
-from core.config import (
+from .config import (
     ActivationConfig,
     InactivationConfig,
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.simulator import ProtocolSimulator
+from .simulator import ProtocolSimulator
 
 
 class CostFunction:

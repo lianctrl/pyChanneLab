@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from typing import Callable, Optional
 
-from core.config import (
+from .config import (
     ActivationConfig,
     InactivationConfig,
     CSInactivationConfig,
@@ -26,7 +26,7 @@ from core.config import (
     G_K_MAX,
     TIME_PARAMS,
 )
-from core.torch_simulator import (
+from .torch_simulator import (
     TorchProtocolSimulator,
     get_device,
     preferred_dtype,

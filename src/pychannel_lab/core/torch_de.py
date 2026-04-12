@@ -18,7 +18,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 
-from core.config import (
+from .config import (
     EXP_FACTOR,
     INITIAL_CONDITIONS,
     G_K_MAX,
@@ -27,19 +27,19 @@ from core.config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.protocols import (
+from .protocols import (
     ActivationProtocol,
     InactivationProtocol,
     CSInactivationProtocol,
     RecoveryProtocol,
 )
-from core.torch_simulator import (
+from .torch_simulator import (
     _get_basis_11,
     _precompute_dynamic_basis,
     get_device,
     preferred_dtype,
 )
-from core.torch_optimizer import (
+from .torch_optimizer import (
     OptimizeResult,
     TorchCostFunction,
     TorchParameterOptimizer,

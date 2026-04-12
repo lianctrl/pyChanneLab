@@ -13,7 +13,7 @@ import numpy as np
 from scipy.linalg import expm as _matrix_expm
 from typing import Callable, Tuple
 
-from core.config import (
+from .config import (
     INITIAL_CONDITIONS,
     TIME_PARAMS,
     G_K_MAX,
@@ -22,8 +22,8 @@ from core.config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.model import IonChannelModel, build_Q as _build_Q_11state
-from core.protocols import (
+from .model import IonChannelModel, build_Q as _build_Q_11state
+from .protocols import (
     ActivationProtocol,
     InactivationProtocol,
     CSInactivationProtocol,

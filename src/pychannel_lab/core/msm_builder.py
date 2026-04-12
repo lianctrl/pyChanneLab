@@ -31,7 +31,7 @@ from typing import Callable
 
 import numpy as np
 
-from core.config import EXP_FACTOR
+from .config import EXP_FACTOR
 
 # ---------------------------------------------------------------------------
 # Data structures

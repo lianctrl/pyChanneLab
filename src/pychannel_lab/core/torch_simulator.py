@@ -13,7 +13,7 @@ from typing import Optional
 import numpy as np
 import torch
 
-from core.config import (
+from .config import (
     EXP_FACTOR,
     INITIAL_CONDITIONS,
     G_K_MAX,
@@ -22,7 +22,7 @@ from core.config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.protocols import (
+from .protocols import (
     ActivationProtocol,
     InactivationProtocol,
     CSInactivationProtocol,

@@ -5,7 +5,7 @@ so the user can freely adjust timing and voltage parameters.
 
 import numpy as np
 from typing import Callable
-from core.config import (
+from .config import (
     ActivationConfig,
     InactivationConfig,
     CSInactivationConfig,
