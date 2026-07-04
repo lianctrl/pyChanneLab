@@ -50,6 +50,7 @@ class CostFunction:
         inact_cfg: InactivationConfig = None,
         csi_cfg: CSInactivationConfig = None,
         rec_cfg: RecoveryConfig = None,
+        custom_protocols: list = None,  # list[CustomProtocolConfig]
         g_k_max: float = None,
         t_total: float = None,
         dt: float = None,
@@ -63,6 +64,7 @@ class CostFunction:
         self._inact_cfg = inact_cfg
         self._csi_cfg = csi_cfg
         self._rec_cfg = rec_cfg
+        self._custom_protocols = custom_protocols or []
         self._g_k_max = g_k_max
         self._t_total = t_total
         self._dt = dt
@@ -121,6 +123,16 @@ class CostFunction:
             rec_cfg = self._rec_cfg or RecoveryConfig()
             x_sim = rec_cfg.t_pulse + np.asarray(x) / 1000.0
             costs["recovery"] = self._mse(sim.run_recovery(x_sim), y)
+
+        for i, cfg in enumerate(self._custom_protocols):
+            if not cfg.enabled:
+                continue
+            key = f"custom_{i}"
+            if key in active:
+                x_exp, y_exp, _ = active[key]
+                x_arr = np.asarray(x_exp, dtype=float)
+                _, y_sim = sim.run_custom_protocol(cfg, sweep_vals=x_arr)
+                costs[key] = self._mse(y_sim, np.asarray(y_exp, dtype=float))
 
         return costs
 
