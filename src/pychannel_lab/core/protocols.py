@@ -3,6 +3,8 @@ Voltage-clamp protocols.  Each class is instantiated with a config dataclass
 so the user can freely adjust timing and voltage parameters.
 """
 
+from copy import copy
+
 import numpy as np
 from typing import Callable
 from .config import (
@@ -10,6 +12,8 @@ from .config import (
     InactivationConfig,
     CSInactivationConfig,
     RecoveryConfig,
+    CustomProtocolConfig,
+    ProtocolSegment,
 )
 
 
@@ -165,3 +169,89 @@ class RecoveryProtocol:
                 return c.v_depo
 
         return voltage
+
+
+class CustomProtocol:
+    """
+    Segment-based custom voltage-clamp protocol.
+
+    Each segment is a constant-voltage block.  One parameter of one segment
+    is swept across simulations: either the voltage value (Family 1, analogous
+    to Activation/Inactivation) or the duration (Family 2, analogous to
+    CSInactivation/Recovery).
+
+    Observable extraction window is anchored to the start of obs_segment_idx
+    in the swept protocol, so the window automatically follows the swept
+    segment for duration-swept protocols.
+    """
+
+    def __init__(self, cfg: CustomProtocolConfig = None):
+        self.cfg = cfg or CustomProtocolConfig()
+
+    def get_sweep_values(self) -> np.ndarray:
+        c = self.cfg
+        if c.sweep_step <= 0:
+            return np.array([c.sweep_min])
+        return np.arange(c.sweep_min, c.sweep_max + c.sweep_step * 0.5, c.sweep_step)
+
+    def _apply_sweep(self, sweep_val: float) -> list:
+        """Return a copy of cfg.segments with the sweep parameter overridden."""
+        segs = [copy(s) for s in self.cfg.segments]
+        if not segs:
+            return segs
+        idx = min(self.cfg.sweep_segment_idx, len(segs) - 1)
+        if self.cfg.sweep_type == "voltage":
+            segs[idx].voltage = sweep_val
+        else:  # "duration"
+            segs[idx].duration = max(sweep_val, 0.0)
+        return segs
+
+    def get_voltage_function(self, sweep_val: float) -> Callable[[float], float]:
+        segs = self._apply_sweep(sweep_val)
+        if not segs:
+            return lambda t: 0.0
+        # Cumulative start times: t_starts[i] = sum of durations of segs 0…i-1
+        t_starts = np.cumsum([0.0] + [s.duration for s in segs[:-1]])
+
+        def voltage(t: float) -> float:
+            # Iterate from last segment to first; return voltage of the first
+            # segment whose start time is <= t.
+            for i in range(len(segs) - 1, -1, -1):
+                if t >= t_starts[i]:
+                    return segs[i].voltage
+            return segs[0].voltage
+
+        return voltage
+
+    def _t_starts(self, sweep_val: float) -> np.ndarray:
+        segs = self._apply_sweep(sweep_val)
+        return np.cumsum([0.0] + [s.duration for s in segs[:-1]])
+
+    def obs_window(self, sweep_val: float) -> tuple[float, float]:
+        """Return (t_start, t_end) of the observable measurement window."""
+        segs = self._apply_sweep(sweep_val)
+        if not segs:
+            return 0.0, 0.0
+        t_starts = np.cumsum([0.0] + [s.duration for s in segs[:-1]])
+        c = self.cfg
+        idx = min(c.obs_segment_idx, len(segs) - 1)
+        t0 = float(t_starts[idx]) + c.obs_offset
+        length = (c.obs_window_length if c.obs_window_length is not None
+                  else segs[idx].duration - c.obs_offset)
+        return t0, t0 + max(float(length), 0.0)
+
+    def ref_window(self, sweep_val: float) -> tuple[float, float]:
+        """Return (t_start, t_end) of the reference window (for obs_type='ratio')."""
+        segs = self._apply_sweep(sweep_val)
+        if not segs:
+            return 0.0, 0.0
+        t_starts = np.cumsum([0.0] + [s.duration for s in segs[:-1]])
+        c = self.cfg
+        idx = min(c.obs_ref_segment_idx, len(segs) - 1)
+        t0 = float(t_starts[idx]) + c.obs_ref_offset
+        length = (c.obs_ref_window_length if c.obs_ref_window_length is not None
+                  else segs[idx].duration - c.obs_ref_offset)
+        return t0, t0 + max(float(length), 0.0)
+
+    def total_duration(self, sweep_val: float) -> float:
+        return float(sum(s.duration for s in self._apply_sweep(sweep_val)))

@@ -153,3 +153,55 @@ class RecoveryConfig:
     max_interval: float = 0.570  # s  — longest  recovery interval
     interval_increment: float = 0.030  # s
     t_end: float = 2.650  # s  — absolute end of test pulse
+
+
+# ---------------------------------------------------------------------------
+# Custom segment-based protocol dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProtocolSegment:
+    """One constant-voltage block in a custom protocol."""
+
+    name: str = ""
+    voltage: float = -90.0  # mV
+    duration: float = 0.100  # s
+
+
+@dataclass
+class CustomProtocolConfig:
+    """
+    Segment-based custom voltage-clamp protocol.
+
+    Build a protocol from an ordered list of constant-voltage segments.
+    One parameter of one segment is swept across simulations (either the
+    voltage value — Family 1 — or the duration — Family 2).
+
+    Observable extraction window is anchored to the *start* of
+    ``obs_segment_idx``, so it naturally follows the swept segment for
+    duration-swept protocols.
+    """
+
+    name: str = "Custom Protocol"
+    segments: list = field(default_factory=list)  # list[ProtocolSegment]
+
+    # --- Sweep axis ---
+    sweep_type: str = "voltage"     # "voltage" | "duration"
+    sweep_segment_idx: int = 0      # which segment is swept
+    sweep_min: float = -90.0
+    sweep_max: float = 60.0
+    sweep_step: float = 10.0
+
+    # --- Observable extraction (window anchored to start of obs_segment_idx) ---
+    obs_segment_idx: int = 1
+    obs_offset: float = 0.0                # s after segment start
+    obs_window_length: float | None = None  # s (None = full segment duration)
+    obs_type: str = "peak_open"            # "peak_open" | "conductance" | "current" | "ratio"
+
+    # Second window for obs_type="ratio" (e.g. I_test / I_pre)
+    obs_ref_segment_idx: int = 0
+    obs_ref_offset: float = 0.0
+    obs_ref_window_length: float | None = None
+
+    enabled: bool = True  # include in optimisation cost
