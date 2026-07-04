@@ -38,6 +38,8 @@ def _init_state() -> None:
         "inact_cfg": InactivationConfig(),
         "csi_cfg": CSInactivationConfig(),
         "rec_cfg": RecoveryConfig(),
+        "custom_protocols": [],          # list[CustomProtocolConfig]
+        "active_custom_protocol_idx": 0,
         "exp_data": {},
         "opt_log": [],
         "opt_result": None,
@@ -72,12 +74,22 @@ from tabs.data import render as render_data
 from tabs.preview import render as render_preview
 from tabs.optimise import render as render_optimise
 from tabs.results import render as render_results
+from tabs.custom_protocol import render as render_custom_protocols
 
 # ── Tab layout ─────────────────────────────────────────────────────────────────
-tab_builder, tab_proto, tab_data, tab_preview, tab_opt, tab_results = st.tabs(
+(
+    tab_builder,
+    tab_proto,
+    tab_custom,
+    tab_data,
+    tab_preview,
+    tab_opt,
+    tab_results,
+) = st.tabs(
     [
         "🏗️ MSM Builder",
         "🧪 Protocols",
+        "🔬 Custom Protocols",
         "📁 Data",
         "🔍 Preview",
         "🚀 Optimise",
@@ -90,6 +102,9 @@ with tab_builder:
 
 with tab_proto:
     render_protocols()
+
+with tab_custom:
+    render_custom_protocols()
 
 with tab_data:
     render_data()
