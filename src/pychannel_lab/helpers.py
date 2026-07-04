@@ -82,12 +82,20 @@ def _simulate_all(params: np.ndarray) -> dict:
     sim = _build_sim(params)
     csi_x_ms = (sim.csi_proto.get_test_times() - ss.csi_cfg.t_initial) * 1000.0
     rec_x_ms = (sim.rec_proto.get_test_times() - ss.rec_cfg.t_pulse) * 1000.0
-    return {
+    result = {
         "activation": (sim.act_proto.get_test_voltages(), sim.run_activation()),
         "inactivation": (sim.inact_proto.get_test_voltages(), sim.run_inactivation()),
         "cs_inactivation": (csi_x_ms, sim.run_cs_inactivation()),
         "recovery": (rec_x_ms, sim.run_recovery()),
     }
+    for i, cfg in enumerate(getattr(ss, "custom_protocols", [])):
+        if cfg.enabled and cfg.segments:
+            try:
+                x, y = sim.run_custom_protocol(cfg)
+                result[f"custom_{i}"] = (x, y)
+            except Exception:
+                pass
+    return result
 
 
 # ── Figure builders ────────────────────────────────────────────────────────────
@@ -260,18 +268,64 @@ def _voltage_preview(proto_key: str) -> go.Figure:
 def _comparison_figure(params: np.ndarray, _sim_data: dict = None) -> go.Figure:
     ss = st.session_state
     sim_data = _sim_data if _sim_data is not None else _simulate_all(params)
+
+    custom_keys = sorted(
+        (k for k in sim_data if k.startswith("custom_")),
+        key=lambda k: int(k.split("_", 1)[1]),
+    )
+    all_keys = list(PROTOCOL_KEYS) + custom_keys
+
+    n_cols = 2
+    n_rows = math.ceil(len(all_keys) / n_cols)
+
+    def _subplot_title(k: str) -> str:
+        if k in PROTOCOL_LABELS:
+            return PROTOCOL_LABELS[k]
+        try:
+            i = int(k.split("_", 1)[1])
+            protos = getattr(ss, "custom_protocols", [])
+            return protos[i].name if i < len(protos) else k
+        except (ValueError, IndexError):
+            return k
+
+    def _x_label(k: str) -> str:
+        if k in PROTOCOL_X_LABELS:
+            return PROTOCOL_X_LABELS[k]
+        try:
+            i = int(k.split("_", 1)[1])
+            cfg = ss.custom_protocols[i]
+            return "Voltage (mV)" if cfg.sweep_type == "voltage" else "Duration (s)"
+        except Exception:
+            return "x"
+
+    def _y_label(k: str) -> str:
+        if k in PROTOCOL_Y_LABELS:
+            return PROTOCOL_Y_LABELS[k]
+        try:
+            i = int(k.split("_", 1)[1])
+            cfg = ss.custom_protocols[i]
+            return {"peak_open": "P_open", "conductance": "g / g_max",
+                    "current": "I / I_max", "ratio": "Ratio"}.get(cfg.obs_type, "Observable")
+        except Exception:
+            return "y"
+
+    titles = [_subplot_title(k) for k in all_keys]
+    while len(titles) < n_rows * n_cols:
+        titles.append("")
+
     fig = make_subplots(
-        rows=2,
-        cols=2,
-        subplot_titles=[PROTOCOL_LABELS[k] for k in PROTOCOL_KEYS],
-        vertical_spacing=0.18,
+        rows=n_rows,
+        cols=n_cols,
+        subplot_titles=titles,
+        vertical_spacing=max(0.10, 0.36 / n_rows),
         horizontal_spacing=0.12,
     )
-    positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+    positions = [(r + 1, c + 1) for r in range(n_rows) for c in range(n_cols)]
 
-    for (row, col), pk in zip(positions, PROTOCOL_KEYS):
+    for (row, col), pk in zip(positions, all_keys):
         x_sim, y_sim = sim_data[pk]
         exp = ss.exp_data.get(pk)
+        show_legend = (row == 1 and col == 1)
 
         if exp is not None:
             x_exp, y_exp, y_err = exp
@@ -287,7 +341,7 @@ def _comparison_figure(params: np.ndarray, _sim_data: dict = None) -> go.Figure:
                     mode="markers",
                     name="Experimental",
                     marker=dict(color="#1f77b4", size=8),
-                    showlegend=(row == 1 and col == 1),
+                    showlegend=show_legend,
                     **err_kw,
                 ),
                 row=row,
@@ -301,16 +355,19 @@ def _comparison_figure(params: np.ndarray, _sim_data: dict = None) -> go.Figure:
                 mode="lines",
                 name="Simulated",
                 line=dict(color="#d62728", width=2),
-                showlegend=(row == 1 and col == 1),
+                showlegend=show_legend,
             ),
             row=row,
             col=col,
         )
 
-        fig.update_xaxes(title_text=PROTOCOL_X_LABELS[pk], row=row, col=col)
-        fig.update_yaxes(title_text=PROTOCOL_Y_LABELS[pk], row=row, col=col)
+        fig.update_xaxes(title_text=_x_label(pk), row=row, col=col)
+        fig.update_yaxes(title_text=_y_label(pk), row=row, col=col)
 
-    fig.update_layout(height=700, title_text="Experimental vs Simulated")
+    fig.update_layout(
+        height=max(700, 350 * n_rows),
+        title_text="Experimental vs Simulated",
+    )
     return fig
 
 
