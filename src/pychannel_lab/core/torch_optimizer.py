@@ -294,14 +294,22 @@ class TorchParameterOptimizer:
 
         if n_adam > 0:
             adam = torch.optim.Adam([raw], lr=adam_lr)
+            best_raw = raw.detach().clone()
+            best_adam_loss = float("inf")
             for i in range(n_adam):
                 adam.zero_grad()
                 loss = compute_loss()
                 loss.backward()
                 adam.step()
                 total_iters[0] += 1
+                loss_val = loss.detach().item()
+                if loss_val < best_adam_loss:
+                    best_adam_loss = loss_val
+                    best_raw = raw.detach().clone()
                 if progress_callback and (i % 10 == 0 or i == n_adam - 1):
-                    progress_callback(total_iters[0], loss.detach().item(), None)
+                    progress_callback(total_iters[0], loss_val, None)
+            with torch.no_grad():
+                raw.copy_(best_raw)
 
         if n_lbfgs > 0:
             lbfgs = torch.optim.LBFGS(
