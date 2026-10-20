@@ -584,6 +584,8 @@ class TorchDEOptimizer:
         log_mask: Optional[list] = None,
         return_population: bool = False,
         p_best: float = 0.2,
+        init_center: Optional[np.ndarray] = None,
+        init_spread: float = 0.5,
     ):
         """
         Run Differential Evolution and return the best free-parameter vector.
@@ -604,6 +606,13 @@ class TorchDEOptimizer:
                     (free params) sorted best-first, for multi-start polishing.
         p_best    : fraction of the population treated as "pbest" élite in the
                     adaptive strategy.
+        init_center : optional free-parameter vector to centre the initial
+                    population on (e.g. a fit of a related dataset).  Member 0
+                    is the centre itself; the rest are perturbed around it.
+                    None → sample the whole box.
+        init_spread : perturbation scale around *init_center*: std of the
+                    log-factor for log-scaled params, fraction of (ub − lb)
+                    for linear ones.
 
         Returns
         -------
@@ -624,6 +633,12 @@ class TorchDEOptimizer:
         lin_init = lb + (ub - lb) * u
         log_init = torch.exp(torch.log(lb.clamp_min(1e-30)) + (torch.log(ub) - torch.log(lb.clamp_min(1e-30))) * u)
         params_init = torch.where(mask, log_init, lin_init)
+        if init_center is not None:
+            c = torch.as_tensor(np.asarray(init_center, float), dtype=dtype, device=device)
+            z = init_spread * torch.randn(P, n, dtype=dtype, device=device)
+            params_init = torch.where(mask, c * torch.exp(z), c + z * (ub - lb))
+            params_init[0] = c
+            params_init = torch.minimum(torch.maximum(params_init, lb), ub)
         raw = _to_raw_batch(params_init, lb, ub, mask)  # (P, n)
 
         with torch.no_grad():
@@ -799,6 +814,8 @@ class TorchPipelineOptimizer:
         strategy: str = "adaptive",
         n_starts: int = 5,
         seed: Optional[int] = None,
+        de_init_center: Optional[np.ndarray] = None,
+        de_init_spread: float = 0.5,
     ) -> OptimizeResult:
         """
         Run the full pipeline.
@@ -824,6 +841,9 @@ class TorchPipelineOptimizer:
                          reproducible.  DE is the only stochastic stage (Adam /
                          L-BFGS are deterministic given the DE-selected starts),
                          so seeding once here fixes the whole pipeline.
+        de_init_center : optional free-parameter vector the DE population is
+                         centred on (see TorchDEOptimizer.optimize).
+        de_init_spread : perturbation scale around *de_init_center*.
 
         Returns
         -------
@@ -861,6 +881,8 @@ class TorchPipelineOptimizer:
                 log_mask=log_mask,
                 return_population=True,
                 progress_callback=_de_cb,
+                init_center=de_init_center,
+                init_spread=de_init_spread,
             )
             k = max(1, min(int(n_starts), pop_sorted.shape[0]))
             starts = [pop_sorted[i] for i in range(k)]

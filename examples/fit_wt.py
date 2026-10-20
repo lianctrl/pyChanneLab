@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Headless fit + visual verification harness for the WT example dataset.
+Headless fit + visual verification harness (WT example dataset by default).
 
 Fits the 11-state Kv MSM to the four experimental protocols in
-``examples/exp_dataset`` with the torch DE -> Adam -> L-BFGS pipeline, then:
+``examples/exp_dataset`` (or ``--data-dir`` / ``--variant``) with the torch
+DE -> Adam -> L-BFGS pipeline, then:
 
   * simulates the fitted model on the experimental x-values,
   * reports per-protocol and total RMSE (printed as JSON on the last line),
@@ -14,6 +15,9 @@ Usage (run from the pyChanneLab/ project root)::
 
     python examples/fit_wt.py                        # defaults
     python examples/fit_wt.py --pop 80 --de-gens 300 --starts 5 --seed 0
+    # mutant, DE population centred on a previous WT fit
+    python examples/fit_wt.py --data-dir ~/Desktop/SNS-PhD/Exp-dataset/NoKCHIP \
+        --variant M373I --init-from examples/output/s23_both.log
 
 All hyperparameters are CLI flags so the fit can be swept without editing code.
 """
@@ -54,17 +58,18 @@ from pychannel_lab.core.torch_simulator import (  # noqa: E402
     TorchProtocolSimulator,
     get_device,
     preferred_dtype,
+    stationary_distribution,
 )
 
 _DATA_DIR = _HERE / "exp_dataset"
 _OUT_DIR = _HERE / "output"
 
-# Files -> protocol keys
+# File prefixes -> protocol keys ({prefix}_{variant}.csv)
 _FILES = {
-    "activation": "Activation_WT.csv",
-    "inactivation": "Inactivation_WT.csv",
-    "cs_inactivation": "CS-Inactivation_WT.csv",
-    "recovery": "Recovery_WT.csv",
+    "activation": "Activation",
+    "inactivation": "Inactivation",
+    "cs_inactivation": "CS-Inactivation",
+    "recovery": "Recovery",
 }
 
 _PANEL = {
@@ -75,13 +80,29 @@ _PANEL = {
 }
 
 
-def load_exp_data() -> dict:
-    """Load the four WT CSVs into the {key: (x, y, err)} structure."""
+def load_exp_data(data_dir=_DATA_DIR, variant="WT") -> dict:
+    """Load the four CSVs of *variant* into the {key: (x, y, err)} structure."""
     exp = {}
-    for key, fname in _FILES.items():
-        x, y, err = load_csv(_DATA_DIR / fname)
+    for key, prefix in _FILES.items():
+        x, y, err = load_csv(Path(data_dir) / f"{prefix}_{variant}.csv")
         exp[key] = (x, y, err)
     return exp
+
+
+def load_params(log_path) -> dict:
+    """Full parameter dict from the last ``JSON`` line of a previous run's log."""
+    lines = [ln for ln in open(log_path) if ln.startswith("JSON ")]
+    return json.loads(lines[-1][5:])["params"]
+
+
+def resting_inactivation(full_params, v_rest=-90.0) -> float:
+    """Inactivated fraction of the steady state at *v_rest*."""
+    msm = make_11state_preset()
+    sim = TorchProtocolSimulator(torch.tensor(full_params, dtype=torch.float64), msm_def=msm)
+    with torch.no_grad():
+        p = stationary_distribution(sim._Q(v_rest))
+    idx = [i for i, s in enumerate(msm.states) if s.state_type == "inactivated"]
+    return float(p[idx].sum())
 
 
 def _configs():
@@ -130,7 +151,7 @@ def rmse(a, b):
     return float(np.sqrt(np.mean((a - b) ** 2)))
 
 
-def make_plot(exp, sim, metrics, out_path: Path, title_suffix=""):
+def make_plot(exp, sim, metrics, out_path: Path, title_suffix="", variant="WT"):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     order = ["activation", "inactivation", "cs_inactivation", "recovery"]
@@ -152,7 +173,7 @@ def make_plot(exp, sim, metrics, out_path: Path, title_suffix=""):
         ax.legend(fontsize=8, loc="best")
         ax.grid(alpha=0.25)
     fig.suptitle(
-        f"pyChanneLab WT fit — total RMSE = {metrics['total']:.4f}{title_suffix}",
+        f"pyChanneLab {variant} fit — total RMSE = {metrics['total']:.4f}{title_suffix}",
         fontsize=13,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.97))
@@ -161,7 +182,15 @@ def make_plot(exp, sim, metrics, out_path: Path, title_suffix=""):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Fit WT dataset and verify visually.")
+    ap = argparse.ArgumentParser(description="Fit a dataset and verify visually.")
+    ap.add_argument("--data-dir", type=str, default=str(_DATA_DIR),
+                    help="folder with the {Activation,...}_{variant}.csv files")
+    ap.add_argument("--variant", type=str, default="WT", help="e.g. WT | M373I | S390N")
+    ap.add_argument("--init-from", type=str, default="",
+                    help="log of a previous run: centre the DE population on its "
+                         "params, or start there with --skip-de")
+    ap.add_argument("--init-spread", type=float, default=0.5,
+                    help="DE perturbation around --init-from (std of the log-factor)")
     ap.add_argument("--pop", type=int, default=60, help="DE population size")
     ap.add_argument("--de-gens", type=int, default=250, help="DE generations")
     ap.add_argument("--adam", type=int, default=600, help="Adam steps")
@@ -183,7 +212,8 @@ def main(argv=None):
                     help="override a parameter's upper bound, e.g. --ub alpha_0=10000 "
                          "(repeatable)")
     ap.add_argument("--seed", type=int, default=42, help="random seed")
-    ap.add_argument("--skip-de", action="store_true", help="skip DE, start local from preset")
+    ap.add_argument("--skip-de", action="store_true",
+                    help="skip DE, start local from --init-from (or the preset)")
     ap.add_argument("--device", type=str, default="cpu",
                     help="'cpu' | 'mps' | 'cuda' | 'auto'. CPU float64 is fastest here "
                          "because matrix_exp has no MPS kernel (falls back to CPU anyway).")
@@ -200,12 +230,17 @@ def main(argv=None):
         device = torch.device(args.device)
     dtype = preferred_dtype(device)
 
-    exp = load_exp_data()
+    exp = load_exp_data(Path(args.data_dir).expanduser(), args.variant)
     act_cfg, inact_cfg, csi_cfg, rec_cfg = _configs()
     msm = make_11state_preset()
     for item in args.ub:
         name, value = item.split("=")
         next(p for p in msm.parameters if p.name == name).upper_bound = float(value)
+
+    init = None
+    if args.init_from:
+        init_full = load_params(args.init_from)
+        init = np.array([init_full[p.name] for p in msm.parameters if not p.frozen], float)
 
     _wv = [float(x) for x in args.weights.split(",")]
     weights = dict(zip(["activation", "inactivation", "cs_inactivation", "recovery"], _wv))
@@ -237,8 +272,12 @@ def main(argv=None):
         adam_lr=args.adam_lr,
         n_lbfgs=args.lbfgs,
         skip_de=args.skip_de,
-        initial_params=msm.free_initial_guess if args.skip_de else None,
+        initial_params=(init if init is not None else msm.free_initial_guess)
+        if args.skip_de else None,
     )
+    if init is not None and not args.skip_de:
+        opt_kw["de_init_center"] = init
+        opt_kw["de_init_spread"] = args.init_spread
     # Pass upgrade kwargs only if the running code supports them.
     import inspect
 
@@ -273,12 +312,13 @@ def main(argv=None):
 
     out_path = Path(args.out)
     tag = f"  [{args.tag}]" if args.tag else ""
-    make_plot(exp, sim, metrics, out_path, title_suffix=tag)
+    make_plot(exp, sim, metrics, out_path, title_suffix=tag, variant=args.variant)
 
     param_dict = {n: float(v) for n, v in zip(msm.param_names, full_params)}
     summary = {
         "rmse": metrics,
         "final_cost": float(result.fun),
+        "resting_I": resting_inactivation(full_params),
         "elapsed_s": round(elapsed, 1),
         "png": str(out_path),
         "params": param_dict,
@@ -287,6 +327,9 @@ def main(argv=None):
             "lbfgs": args.lbfgs, "starts": args.starts, "strategy": args.strategy,
             "seed": args.seed, "peak_steps": args.peak_steps, "reg": args.reg,
             "rest_lambda": args.rest_lambda, "ub": args.ub,
+            "data_dir": args.data_dir, "variant": args.variant,
+            "init_from": args.init_from, "init_spread": args.init_spread,
+            "skip_de": args.skip_de, "weights": args.weights,
         },
     }
     print("\nPER-PROTOCOL RMSE:")
