@@ -362,6 +362,12 @@ def render() -> None:
             key=f"enabled_{idx}",
             help="When enabled and experimental data is uploaded, this protocol contributes to the cost function in the exported run script.",
         )
+        cfg.steady_state_start = st.checkbox(
+            "Start each sweep from steady state at the first segment's voltage",
+            value=bool(cfg.steady_state_start),
+            key=f"ss_start_{idx}",
+            help="The first segment is treated as the holding potential the cell rests at between sweeps.",
+        )
 
         # ── Waveform preview ──────────────────────────────────────────────────
         st.markdown("**Waveform preview** (green = measurement window)")

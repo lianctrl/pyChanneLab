@@ -5,6 +5,20 @@ import streamlit as st
 from helpers import PROTOCOL_KEYS, PROTOCOL_LABELS, _voltage_preview
 
 
+def _steady_state_toggle(c, key: str) -> None:
+    c.steady_state_start = st.checkbox(
+        "Start each sweep from steady state at V_hold",
+        value=bool(c.steady_state_start),
+        key=key,
+        help=(
+            "The cell rests at V_hold for seconds between sweeps, so each sweep "
+            "starts from the equilibrium state distribution there. When off, the "
+            "sweep starts from the MSM initial conditions and only relaxes for the "
+            "initial hold (t_hold / t_initial / t_prep)."
+        ),
+    )
+
+
 def render() -> None:
     ss = st.session_state
 
@@ -43,6 +57,7 @@ def render() -> None:
             key="a_ttest",
             min_value=0.001,
         )
+        _steady_state_toggle(c, "a_ss")
         st.plotly_chart(_voltage_preview("activation"), width="stretch")
 
     # ── Inactivation ───────────────────────────────────────────────────────────
@@ -70,6 +85,7 @@ def render() -> None:
         c.t_cond = col2.number_input(
             "t_cond (s)", value=float(c.t_cond), step=0.1, key="i_tcond", min_value=0.01
         )
+        _steady_state_toggle(c, "i_ss")
         st.plotly_chart(_voltage_preview("inactivation"), width="stretch")
 
     # ── Closed-state inactivation ──────────────────────────────────────────────
@@ -112,6 +128,7 @@ def render() -> None:
         c.t_test_end = col2.number_input(
             "t_test_end (s)", value=float(c.t_test_end), step=0.05, key="csi_te"
         )
+        _steady_state_toggle(c, "csi_ss")
         st.plotly_chart(_voltage_preview("cs_inactivation"), width="stretch")
 
     # ── Recovery ───────────────────────────────────────────────────────────────
@@ -150,4 +167,5 @@ def render() -> None:
         c.t_end = col1.number_input(
             "t_end (s)", value=float(c.t_end), step=0.05, key="rec_te"
         )
+        _steady_state_toggle(c, "rec_ss")
         st.plotly_chart(_voltage_preview("recovery"), width="stretch")

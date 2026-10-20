@@ -14,7 +14,7 @@ from .config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from .simulator import ProtocolSimulator
+from .simulator import ProtocolSimulator, stationary_distribution
 from .param_transform import prior_penalty_np
 
 
@@ -56,10 +56,20 @@ class CostFunction:
         t_total: float = None,
         dt: float = None,
         reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
         self.reg_lambda = reg_lambda
+        # Resting-inactivation penalty, matching the torch cost functions.
+        self.rest_lambda = rest_lambda
+        self.v_rest = v_rest
+        self._inact_idx = (
+            [i for i, s in enumerate(msm_def.states) if s.state_type == "inactivated"]
+            if msm_def is not None
+            else []
+        )
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -152,7 +162,12 @@ class CostFunction:
                 [b[1] for b in fb],
                 self._msm_def.free_log_mask,
             )
-        return data_cost + reg_cost
+        rest_cost = 0.0
+        if self.rest_lambda > 0.0 and self._inact_idx:
+            sim = self._build_sim(self._expand(parameters))
+            p_rest = stationary_distribution(sim._build_Q(self.v_rest))
+            rest_cost = self.rest_lambda * float(p_rest[self._inact_idx].sum()) ** 2
+        return data_cost + reg_cost + rest_cost
 
     def __call__(self, parameters: np.ndarray) -> float:
         return self.total_cost(parameters)

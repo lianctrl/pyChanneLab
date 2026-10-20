@@ -177,6 +177,30 @@ def render() -> None:
             "reproducible / less seed-dependent without biasing rates toward zero."
         ),
     )
+    rest_lambda = st.number_input(
+        "Resting-inactivation penalty λ",
+        value=float(ss.get("opt_rest_lambda", 0.0)),
+        min_value=0.0,
+        format="%.4f",
+        step=0.01,
+        key="opt_rest_lambda",
+        help=(
+            "Adds λ·I_rest² to the loss, where I_rest is the inactivated fraction of "
+            "the steady state at the resting voltage below. Normalised data cannot "
+            "pin how many channels are available at rest, so without it fits may "
+            "leave many inactivated. "
+            "0 = off; 0.1 brought WT to ~3% resting inactivation."
+        ),
+    )
+    v_rest = st.number_input(
+        "Resting voltage for the penalty (mV)",
+        value=float(ss.get("opt_v_rest", -90.0)),
+        step=5.0,
+        key="opt_v_rest",
+        help="Voltage at which the resting inactivated fraction is evaluated "
+        "(normally the holding potential).",
+        disabled=rest_lambda == 0.0,
+    )
 
     st.subheader("Protocol weights")
     wc = st.columns(4)
@@ -337,6 +361,8 @@ def render() -> None:
             device=_torch_device,
             dtype=_torch_dtype,
             reg_lambda=float(reg_lambda),
+            rest_lambda=float(rest_lambda),
+            v_rest=float(v_rest),
         )
         ss.opt_costs_initial = pipeline.cost_breakdown(defn.free_initial_guess)
 
