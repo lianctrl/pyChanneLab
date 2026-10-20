@@ -48,6 +48,7 @@ from .param_transform import (
     to_raw as _pt_to_raw,
     from_raw as _pt_from_raw,
     build_log_mask,
+    prior_penalty,
 )
 
 # ─── batched Q-matrix builders ────────────────────────────────────────────────
@@ -458,10 +459,10 @@ class BatchedProtocolSimulator:
                 x_sim, np.asarray(y)
             )
 
-        if reg_lambda > 0.0:
-            # L2 penalty: lambda * sum(theta^2) per population member
-            loss = loss + reg_lambda * (self.params ** 2).sum(dim=1)
-
+        # NOTE: regularization is applied in TorchDEOptimizer._eval_population
+        # (which has the *free* params + prior), not here — this simulator only
+        # sees the full expanded params.  reg_lambda is accepted for signature
+        # compatibility but intentionally unused.
         return loss
 
 
@@ -517,6 +518,13 @@ class TorchDEOptimizer:
         self.reg_lambda = reg_lambda
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
+        # Prior (free initial guess) for the scale-invariant regularizer.
+        if msm_def is not None:
+            self._reg_prior = torch.tensor(
+                msm_def.free_initial_guess, dtype=self.dtype, device=self.device
+            )
+        else:
+            self._reg_prior = None
 
     def _eval_population(
         self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
@@ -535,7 +543,13 @@ class TorchDEOptimizer:
             t_total=self._t_total,
             n_peak_steps=self._n_peak_steps,
         )
-        return sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg, self.reg_lambda)
+        loss = sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg)
+        if self.reg_lambda > 0.0 and self._reg_prior is not None:
+            # Scale-invariant pull toward the prior, per population member (P,).
+            loss = loss + self.reg_lambda * prior_penalty(
+                params_free, self._reg_prior, lb, ub, log_mask
+            )
+        return loss
 
     def optimize(
         self,

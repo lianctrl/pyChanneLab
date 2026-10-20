@@ -15,6 +15,7 @@ from .config import (
     RecoveryConfig,
 )
 from .simulator import ProtocolSimulator
+from .param_transform import prior_penalty_np
 
 
 class CostFunction:
@@ -139,7 +140,18 @@ class CostFunction:
     def total_cost(self, parameters: np.ndarray) -> float:
         costs = self.individual_costs(parameters)
         data_cost = sum(self.w.get(k, 1.0) * v for k, v in costs.items())
-        reg_cost = self.reg_lambda * float(np.sum(parameters ** 2))
+        reg_cost = 0.0
+        if self.reg_lambda > 0.0 and self._msm_def is not None:
+            # Scale-invariant pull toward the prior (initial guess), matching the
+            # torch path; `parameters` is the free-length vector.
+            fb = self._msm_def.free_bounds
+            reg_cost = self.reg_lambda * prior_penalty_np(
+                parameters,
+                self._msm_def.free_initial_guess,
+                [b[0] for b in fb],
+                [b[1] for b in fb],
+                self._msm_def.free_log_mask,
+            )
         return data_cost + reg_cost
 
     def __call__(self, parameters: np.ndarray) -> float:

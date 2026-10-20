@@ -35,6 +35,7 @@ from .param_transform import (
     to_raw as _pt_to_raw,
     from_raw as _pt_from_raw,
     build_log_mask,
+    prior_penalty,
 )
 
 
@@ -101,6 +102,22 @@ class TorchCostFunction:
         self._n_peak_steps = n_peak_steps
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
+        self._reg_prior, self._reg_lb, self._reg_ub, self._reg_logmask = (
+            self._build_reg_tensors(msm_def)
+        )
+
+    def _build_reg_tensors(self, msm_def):
+        """Prior/bounds/log-mask (free params) for the scale-invariant penalty."""
+        if msm_def is None:
+            return None, None, None, None
+        fb = msm_def.free_bounds
+        lb = torch.tensor([b[0] for b in fb], dtype=self.dtype, device=self.device)
+        ub = torch.tensor([b[1] for b in fb], dtype=self.dtype, device=self.device)
+        prior = torch.tensor(
+            msm_def.free_initial_guess, dtype=self.dtype, device=self.device
+        )
+        mask = torch.tensor(msm_def.free_log_mask, dtype=torch.bool, device=self.device)
+        return prior, lb, ub, mask
 
     def _expand_params(self, free_params: torch.Tensor) -> torch.Tensor:
         """
@@ -181,8 +198,12 @@ class TorchCostFunction:
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
             loss = loss + self.w.get("recovery", 1.0) * ((pred - target) ** 2).mean()
 
-        if self.reg_lambda > 0.0:
-            loss = loss + self.reg_lambda * (params ** 2).sum()
+        if self.reg_lambda > 0.0 and self._reg_prior is not None:
+            # Scale-invariant pull toward the prior (initial guess); `params` is
+            # the free-length vector, matching the free prior/bounds/mask.
+            loss = loss + self.reg_lambda * prior_penalty(
+                params, self._reg_prior, self._reg_lb, self._reg_ub, self._reg_logmask
+            )
 
         return loss
 

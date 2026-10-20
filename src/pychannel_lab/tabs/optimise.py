@@ -136,8 +136,10 @@ def render() -> None:
         step=1e-5,
         key="opt_reg_lambda",
         help=(
-            "Adds λ·Σθ² to the loss. Set to 0 to disable. "
-            "Penalises large parameter values and can improve conditioning."
+            "Scale-invariant pull toward the initial-guess prior: penalises the "
+            "squared log-fold deviation of each rate (linear params normalised by "
+            "their bound width). 0 = off. Try 1e-3…1e-1 to make fits more "
+            "reproducible / less seed-dependent without biasing rates toward zero."
         ),
     )
 
