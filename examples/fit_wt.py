@@ -176,6 +176,12 @@ def main(argv=None):
     ap.add_argument("--reg", type=float, default=0.0,
                     help="L2 regularization lambda (scale-invariant pull toward the "
                          "initial guess; 0=off, try 1e-3..1e-1)")
+    ap.add_argument("--rest-lambda", type=float, default=0.0,
+                    help="penalty weight on the inactivated fraction at -90 mV rest "
+                         "(normalised data can't pin resting availability; 0=off)")
+    ap.add_argument("--ub", action="append", default=[], metavar="NAME=VALUE",
+                    help="override a parameter's upper bound, e.g. --ub alpha_0=10000 "
+                         "(repeatable)")
     ap.add_argument("--seed", type=int, default=42, help="random seed")
     ap.add_argument("--skip-de", action="store_true", help="skip DE, start local from preset")
     ap.add_argument("--device", type=str, default="cpu",
@@ -197,6 +203,9 @@ def main(argv=None):
     exp = load_exp_data()
     act_cfg, inact_cfg, csi_cfg, rec_cfg = _configs()
     msm = make_11state_preset()
+    for item in args.ub:
+        name, value = item.split("=")
+        next(p for p in msm.parameters if p.name == name).upper_bound = float(value)
 
     _wv = [float(x) for x in args.weights.split(",")]
     weights = dict(zip(["activation", "inactivation", "cs_inactivation", "recovery"], _wv))
@@ -207,6 +216,7 @@ def main(argv=None):
         experimental_data=exp,
         weights=weights,
         reg_lambda=args.reg,
+        rest_lambda=args.rest_lambda,
         msm_def=msm,
         act_cfg=act_cfg,
         inact_cfg=inact_cfg,
@@ -276,6 +286,7 @@ def main(argv=None):
             "pop": args.pop, "de_gens": args.de_gens, "adam": args.adam,
             "lbfgs": args.lbfgs, "starts": args.starts, "strategy": args.strategy,
             "seed": args.seed, "peak_steps": args.peak_steps, "reg": args.reg,
+            "rest_lambda": args.rest_lambda, "ub": args.ub,
         },
     }
     print("\nPER-PROTOCOL RMSE:")
