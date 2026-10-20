@@ -44,6 +44,11 @@ from .torch_optimizer import (
     TorchCostFunction,
     TorchParameterOptimizer,
 )
+from .param_transform import (
+    to_raw as _pt_to_raw,
+    from_raw as _pt_from_raw,
+    build_log_mask,
+)
 
 # ─── batched Q-matrix builders ────────────────────────────────────────────────
 
@@ -198,21 +203,22 @@ def _expand_batch(params_free: torch.Tensor, msm_def) -> torch.Tensor:
 
 
 # ─── sigmoid / logit transforms (batched) ────────────────────────────────────
+# Thin wrappers over the shared param_transform helpers so DE, Adam and L-BFGS
+# all use exactly the same bounded<->raw mapping (linear or per-parameter log).
 
 
 def _to_raw_batch(
-    params: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+    params: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
 ) -> torch.Tensor:
-    """Map (P, n) param tensor → logit space. lb/ub : (n,)."""
-    normalized = ((params - lb) / (ub - lb)).clamp(0.001, 0.999)
-    return torch.logit(normalized)
+    """Map (P, n) param tensor → raw space. lb/ub/log_mask : (n,)."""
+    return _pt_to_raw(params, lb, ub, log_mask)
 
 
 def _from_raw_batch(
-    raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+    raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
 ) -> torch.Tensor:
-    """Map (P, n) logit tensor → param space. lb/ub : (n,)."""
-    return lb + (ub - lb) * torch.sigmoid(raw)
+    """Map (P, n) raw tensor → param space. lb/ub/log_mask : (n,)."""
+    return _pt_from_raw(raw, lb, ub, log_mask)
 
 
 # ─── batched protocol simulator ──────────────────────────────────────────────
@@ -513,10 +519,10 @@ class TorchDEOptimizer:
         self.dtype = dtype or preferred_dtype(self.device)
 
     def _eval_population(
-        self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+        self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
     ) -> torch.Tensor:
         """Evaluate (P,) fitness values for all members in the raw population."""
-        params_free = _from_raw_batch(raw, lb, ub)  # (P, n_free)
+        params_free = _from_raw_batch(raw, lb, ub, log_mask)  # (P, n_free)
         params_full = _expand_batch(params_free, self._msm_def)  # (P, n_full)
         sim = BatchedProtocolSimulator(
             params_full,
@@ -539,6 +545,7 @@ class TorchDEOptimizer:
         F: float = 0.8,
         CR: float = 0.9,
         progress_callback: Optional[Callable] = None,
+        log_mask: Optional[list] = None,
     ) -> np.ndarray:
         """
         Run DE/rand/1/bin and return best free-parameter vector as numpy array.
@@ -550,6 +557,8 @@ class TorchDEOptimizer:
         maxiter   : number of generations
         F         : differential weight  (mutation scale, typically 0.5-0.9)
         CR        : crossover probability (typically 0.7-1.0)
+        log_mask  : per-free-parameter log-scale flags (e.g.
+                    ``msm_def.free_log_mask``).  None → inferred from bounds.
 
         Returns
         -------
@@ -561,13 +570,18 @@ class TorchDEOptimizer:
 
         lb = torch.tensor([b[0] for b in bounds], dtype=dtype, device=device)
         ub = torch.tensor([b[1] for b in bounds], dtype=dtype, device=device)
+        mask = build_log_mask(bounds, log_mask, device=device)
 
-        # Initialise population uniformly in parameter space, then logit-transform
-        params_init = lb + (ub - lb) * torch.rand(P, n, dtype=dtype, device=device)
-        raw = _to_raw_batch(params_init, lb, ub)  # (P, n)
+        # Initialise population.  For log-scaled parameters sample log-uniformly
+        # so orders of magnitude are covered evenly; linear params stay uniform.
+        u = torch.rand(P, n, dtype=dtype, device=device)
+        lin_init = lb + (ub - lb) * u
+        log_init = torch.exp(torch.log(lb.clamp_min(1e-30)) + (torch.log(ub) - torch.log(lb.clamp_min(1e-30))) * u)
+        params_init = torch.where(mask, log_init, lin_init)
+        raw = _to_raw_batch(params_init, lb, ub, mask)  # (P, n)
 
         with torch.no_grad():
-            fitness = self._eval_population(raw, lb, ub)  # (P,)
+            fitness = self._eval_population(raw, lb, ub, mask)  # (P,)
         fitness = torch.nan_to_num(fitness, nan=1e6, posinf=1e6)
 
         for gen in range(maxiter):
@@ -578,13 +592,13 @@ class TorchDEOptimizer:
             mutant = raw[r1] + F * (raw[r2] - raw[r3])  # (P, n)
 
             # Crossover: binomial with guaranteed minimum one mutant gene
-            mask = torch.rand(P, n, dtype=dtype, device=device) < CR
+            cross = torch.rand(P, n, dtype=dtype, device=device) < CR
             j_rand = torch.randint(n, (P,), device=device)
-            mask[torch.arange(P, device=device), j_rand] = True
-            trial = torch.where(mask, mutant, raw)  # (P, n)
+            cross[torch.arange(P, device=device), j_rand] = True
+            trial = torch.where(cross, mutant, raw)  # (P, n)
 
             with torch.no_grad():
-                trial_fitness = self._eval_population(trial, lb, ub)  # (P,)
+                trial_fitness = self._eval_population(trial, lb, ub, mask)  # (P,)
             trial_fitness = torch.nan_to_num(trial_fitness, nan=1e6, posinf=1e6)
 
             # Selection: keep trial if it improves fitness
@@ -597,7 +611,7 @@ class TorchDEOptimizer:
 
         best_idx = int(fitness.argmin())
         best_raw = raw[best_idx : best_idx + 1]  # (1, n)
-        best_free = _from_raw_batch(best_raw, lb, ub).squeeze(0)
+        best_free = _from_raw_batch(best_raw, lb, ub, mask).squeeze(0)
         return best_free.cpu().numpy()
 
 
@@ -672,6 +686,7 @@ class TorchPipelineOptimizer:
         )
         self._torch_cost = TorchCostFunction(**_local_kw)
         self._local = TorchParameterOptimizer(self._torch_cost)
+        self._msm_def = msm_def
 
     def optimize(
         self,
@@ -709,6 +724,9 @@ class TorchPipelineOptimizer:
         OptimizeResult with .x (best free params), .fun, .nit
         """
         de_gen = [0]
+        # Log-scale mask from the MSM (positive-lower-bound free params); the DE
+        # and local optimisers infer it from the bounds when no MSM is present.
+        log_mask = self._msm_def.free_log_mask if self._msm_def is not None else None
 
         if skip_de:
             if initial_params is None:
@@ -728,6 +746,7 @@ class TorchPipelineOptimizer:
                 maxiter=de_maxiter,
                 F=F,
                 CR=CR,
+                log_mask=log_mask,
                 progress_callback=_de_cb,
             )
 
@@ -743,6 +762,7 @@ class TorchPipelineOptimizer:
             adam_lr=adam_lr,
             n_lbfgs=n_lbfgs,
             progress_callback=_local_cb,
+            log_mask=log_mask,
         )
 
         return result

@@ -31,6 +31,11 @@ from .torch_simulator import (
     get_device,
     preferred_dtype,
 )
+from .param_transform import (
+    to_raw as _pt_to_raw,
+    from_raw as _pt_from_raw,
+    build_log_mask,
+)
 
 
 class OptimizeResult:
@@ -240,16 +245,16 @@ class TorchParameterOptimizer:
         params_np: np.ndarray,
         lb: torch.Tensor,
         ub: torch.Tensor,
+        log_mask: torch.Tensor = None,
     ) -> torch.Tensor:
         p = torch.tensor(params_np, dtype=lb.dtype, device=lb.device)
-        normalized = ((p - lb) / (ub - lb)).clamp(0.001, 0.999)
-        return torch.logit(normalized)
+        return _pt_to_raw(p, lb, ub, log_mask)
 
     @staticmethod
     def _from_raw(
-        raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+        raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask: torch.Tensor = None
     ) -> torch.Tensor:
-        return lb + (ub - lb) * torch.sigmoid(raw)
+        return _pt_from_raw(raw, lb, ub, log_mask)
 
     def optimize(
         self,
@@ -259,6 +264,7 @@ class TorchParameterOptimizer:
         adam_lr: float = 0.05,
         n_lbfgs: int = 200,
         progress_callback: Optional[Callable] = None,
+        log_mask: Optional[list] = None,
     ) -> OptimizeResult:
         """
         Run Adam followed by L-BFGS.
@@ -281,11 +287,12 @@ class TorchParameterOptimizer:
 
         lb = torch.tensor([b[0] for b in bounds], dtype=dtype, device=device)
         ub = torch.tensor([b[1] for b in bounds], dtype=dtype, device=device)
+        mask = build_log_mask(bounds, log_mask, device=device)
 
-        raw = self._to_raw(initial_guess, lb, ub).detach().requires_grad_(True)
+        raw = self._to_raw(initial_guess, lb, ub, mask).detach().requires_grad_(True)
 
         def get_params() -> torch.Tensor:
-            return self._from_raw(raw, lb, ub)
+            return self._from_raw(raw, lb, ub, mask)
 
         def compute_loss() -> torch.Tensor:
             return self.cost(get_params())
