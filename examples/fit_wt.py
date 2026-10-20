@@ -197,7 +197,8 @@ def main(argv=None):
     ap.add_argument("--adam-lr", type=float, default=0.05, help="Adam learning rate")
     ap.add_argument("--lbfgs", type=int, default=200, help="L-BFGS outer steps")
     ap.add_argument("--starts", type=int, default=5, help="top-K multi-start polish")
-    ap.add_argument("--peak-steps", type=int, default=50, help="peak substeps")
+    ap.add_argument("--peak-steps", type=int, default=16,
+                    help="peak-detection samples per octave after each test step")
     ap.add_argument("--strategy", type=str, default="adaptive",
                     help="DE strategy: 'adaptive' | 'rand1'")
     ap.add_argument("--weights", type=str, default="1,1,2,2",
@@ -211,6 +212,8 @@ def main(argv=None):
     ap.add_argument("--ub", action="append", default=[], metavar="NAME=VALUE",
                     help="override a parameter's upper bound, e.g. --ub alpha_0=10000 "
                          "(repeatable)")
+    ap.add_argument("--lb", action="append", default=[], metavar="NAME=VALUE",
+                    help="override a parameter's lower bound (repeatable)")
     ap.add_argument("--seed", type=int, default=42, help="random seed")
     ap.add_argument("--skip-de", action="store_true",
                     help="skip DE, start local from --init-from (or the preset)")
@@ -236,6 +239,9 @@ def main(argv=None):
     for item in args.ub:
         name, value = item.split("=")
         next(p for p in msm.parameters if p.name == name).upper_bound = float(value)
+    for item in args.lb:
+        name, value = item.split("=")
+        next(p for p in msm.parameters if p.name == name).lower_bound = float(value)
 
     init = None
     if args.init_from:
@@ -326,7 +332,7 @@ def main(argv=None):
             "pop": args.pop, "de_gens": args.de_gens, "adam": args.adam,
             "lbfgs": args.lbfgs, "starts": args.starts, "strategy": args.strategy,
             "seed": args.seed, "peak_steps": args.peak_steps, "reg": args.reg,
-            "rest_lambda": args.rest_lambda, "ub": args.ub,
+            "rest_lambda": args.rest_lambda, "ub": args.ub, "lb": args.lb,
             "data_dir": args.data_dir, "variant": args.variant,
             "init_from": args.init_from, "init_spread": args.init_spread,
             "skip_de": args.skip_de, "weights": args.weights,
