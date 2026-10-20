@@ -68,17 +68,19 @@ INITIAL_GUESS = np.array(
     ]
 )
 
+# Lower bounds are strictly positive so parameters can be optimised in log
+# space (see ParamSpec.log_scale in msm_builder.py).
 PARAMETER_BOUNDS = (
-    (0.0, 2000.0),  # alpha_0
-    (0.0, 5.0),  # alpha_1
-    (0.0, 100.0),  # beta_0
-    (0.0, 5.0),  # beta_1
-    (0.0, 1000.0),  # k_CO_0
-    (0.0, 5.0),  # k_CO_1
-    (0.0, 1000.0),  # k_OC_0
-    (0.0, 5.0),  # k_OC_1
-    (0.0, 2000.0),  # k_CI
-    (0.0, 100.0),  # k_IC
+    (1e-3, 2000.0),  # alpha_0
+    (1e-4, 5.0),  # alpha_1
+    (1e-3, 100.0),  # beta_0
+    (1e-4, 5.0),  # beta_1
+    (1e-3, 1000.0),  # k_CO_0
+    (1e-4, 5.0),  # k_CO_1
+    (1e-3, 1000.0),  # k_OC_0
+    (1e-4, 5.0),  # k_OC_1
+    (1e-3, 2000.0),  # k_CI
+    (1e-3, 100.0),  # k_IC
     (0.01, 1.0),  # f — must be strictly > 0 (model has kIC/f**4 terms)
 )
 
