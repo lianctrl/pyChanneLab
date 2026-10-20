@@ -3,8 +3,8 @@
 Tabulate fit_wt.py runs of one variant into two CSVs.
 
   {variant}_params.csv  — one row per run: the 11 MSM parameters, per-protocol
-                          and total RMSE (as logged by the run, i.e. at its own
-                          --peak-steps, matching its PNG), final cost,
+                          and total RMSE (as logged by the run, matching its
+                          PNG), final cost,
                           resting I(-90 mV).
   {variant}_gating.csv  — Table S1-style gating fits (value and SE) of the
                           experimental points and of each run's simulation:
@@ -49,13 +49,12 @@ GATING = {
 
 
 def simulate(params: dict, exp: dict) -> dict:
-    """Model curves at the experimental x-values (n_peak_steps=50)."""
+    """Model curves at the experimental x-values (default peak resolution)."""
     msm = make_11state_preset()
     act, inact, csi, rec = fit_wt._configs()
     sim = TorchProtocolSimulator(
         torch.tensor([params[n] for n in msm.param_names], dtype=torch.float64),
         msm_def=msm, act_cfg=act, inact_cfg=inact, csi_cfg=csi, rec_cfg=rec,
-        n_peak_steps=50,
     )
     x = {k: np.asarray(exp[k][0], float) for k in PROTOCOLS}
     with torch.no_grad():

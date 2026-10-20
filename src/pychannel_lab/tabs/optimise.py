@@ -154,12 +154,17 @@ def render() -> None:
         "L-BFGS steps", value=200, min_value=0, max_value=2000, step=20, key="opt_lbfgs"
     )
     n_peak_steps = col8.number_input(
-        "Peak-detection substeps",
-        value=50,
-        min_value=10,
-        max_value=200,
-        step=10,
+        "Peak-detection samples per octave",
+        value=16,
+        min_value=2,
+        max_value=64,
+        step=2,
         key="opt_peak_steps",
+        help=(
+            "The open probability is sampled on a geometric time grid after each "
+            "test step (first sample at 10 µs, step doubling every octave), so "
+            "peaks at any time scale are resolved with relative spacing ≈ 1/N."
+        ),
     )
 
     st.subheader("Regularization")

@@ -40,7 +40,7 @@ def _csi_cfg(t_initial: float, steady: bool) -> CSInactivationConfig:
 
 
 def _torch_sim(params=PARAMS, **kw) -> TorchProtocolSimulator:
-    return TorchProtocolSimulator(params, msm_def=MSM, n_peak_steps=40, **kw)
+    return TorchProtocolSimulator(params, msm_def=MSM, n_peak_steps=8, **kw)
 
 
 class TestStationaryDistribution:
@@ -104,7 +104,7 @@ class TestOtherSimulators:
         y_target = y * 0.9
         single = float(np.mean((y - y_target) ** 2))
         batched = BatchedProtocolSimulator(
-            PARAMS.unsqueeze(0), msm_def=MSM, csi_cfg=cfg, n_peak_steps=40
+            PARAMS.unsqueeze(0), msm_def=MSM, csi_cfg=cfg, n_peak_steps=8
         ).cs_inactivation_loss(x_sim, y_target)
         assert float(batched[0]) == pytest.approx(single, rel=1e-8)
 

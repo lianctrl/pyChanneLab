@@ -233,19 +233,55 @@ def stationary_distribution(Q: torch.Tensor) -> torch.Tensor:
     return p / p.sum(dim=-1, keepdim=True)
 
 
+PEAK_T0 = 1e-5  # first peak sample 10 µs after the voltage step (s)
+
+
+def propagate_peak(expm, Q, P, total_dt, open_idx, per_octave, t0=PEAK_T0):
+    """Propagate P through total_dt at generator Q, tracking the peak open probability.
+
+    Peaks are a few ms after the step while the window can last seconds, so
+    the open probability is sampled on a geometric grid: *per_octave* samples
+    spaced dt, then dt doubles (dt₀ = t0) — relative spacing ≈ 1/per_octave at
+    every time scale.  Each octave's propagator is the square of the previous
+    one, so the grid costs a single matrix_exp plus one for the exact
+    remainder.  Batched over leading dims: Q (…, n, n), P (…, n).
+
+    Returns (P_final, peak) with P_final exact at total_dt.
+    """
+    dt = min(t0, total_dt / per_octave)
+    M = expm(Q * dt)
+    x = P.unsqueeze(-1)
+    opens = [P[..., open_idx].sum(dim=-1)]
+    t = 0.0
+    while True:
+        k = min(per_octave, int((total_dt - t) / dt + 1e-9))
+        for _ in range(k):
+            x = M @ x
+            opens.append(x[..., open_idx, 0].sum(dim=-1))
+        t += k * dt
+        if k < per_octave:
+            break
+        M = M @ M
+        dt *= 2.0
+    if total_dt - t > 1e-12:
+        x = expm(Q * (total_dt - t)) @ x
+    return x.squeeze(-1), torch.stack(opens).max(dim=0).values
+
+
 class TorchProtocolSimulator:
     """
     Matrix-exponential simulator for all four voltage-clamp protocols.
 
     Equilibration phases (long, constant V) use a single matrix_exp call —
-    exact with no step-size error.  Measurement phases use n_peak_steps
-    substeps so that the peak open probability can be tracked.
+    exact with no step-size error.  Measurement phases sample the open
+    probability on a geometric time grid (propagate_peak) to find the peak.
 
     Parameters
     ----------
     params : torch.Tensor  — kinetic parameters, requires_grad for autograd.
     msm_def : MSMDefinition, optional — custom topology; None → 11-state model.
-    n_peak_steps : int — temporal resolution inside measurement phases.
+    n_peak_steps : int — peak-detection samples per octave (doubling of time
+        after the step) inside measurement phases.
     t_total : float — total simulation time (s), needed for inactivation / recovery.
     """
 
@@ -260,7 +296,7 @@ class TorchProtocolSimulator:
         g_k_max: float = G_K_MAX,
         initial_state=None,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
     ):
         self.params = params
         self.msm_def = msm_def
@@ -314,24 +350,15 @@ class TorchProtocolSimulator:
         self, P: torch.Tensor, V: float, total_dt: float
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Propagate through total_dt at voltage V using n_peak_steps substeps.
+        Propagate through total_dt at voltage V, sampling the open
+        probability n_peak_steps times per octave (see propagate_peak).
 
         Returns (P_final, peak_open_probability).
         Gradient flows through the peak value via torch.max.
         """
-        n = self.n_peak_steps
-        dt_sub = total_dt / n
-        M = self._expm(self._Q(V) * dt_sub)
-
-        states = [P]
-        for _ in range(n):
-            P = M @ P
-            states.append(P)
-
-        all_states = torch.stack(states, dim=0)  # (n+1, n_states)
-        open_probs = all_states[:, self._open_idx].sum(dim=1)  # (n+1,)
-        peak = open_probs.max()
-        return P, peak
+        return propagate_peak(
+            self._expm, self._Q(V), P, total_dt, self._open_idx, self.n_peak_steps
+        )
 
     def _open_prob(self, P: torch.Tensor) -> torch.Tensor:
         return P[self._open_idx].sum()

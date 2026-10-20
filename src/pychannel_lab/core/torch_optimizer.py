@@ -85,7 +85,7 @@ class TorchCostFunction:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = TIME_PARAMS["tend"],
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,

@@ -434,7 +434,7 @@ def generate_run_script() -> str:
     _n_adam = int(ss.get("opt_n_adam", 500))
     _adam_lr = float(ss.get("opt_adam_lr", 0.05))
     _n_lbfgs = int(ss.get("opt_lbfgs", 200))
-    _n_peak_steps = int(ss.get("opt_peak_steps", 50))
+    _n_peak_steps = int(ss.get("opt_peak_steps", 16))
     _reg_lambda = float(ss.get("opt_reg_lambda", 0.0))
     _rest_lambda = float(ss.get("opt_rest_lambda", 0.0))
     _v_rest = float(ss.get("opt_v_rest", -90.0))

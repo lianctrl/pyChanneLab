@@ -38,6 +38,7 @@ from .torch_simulator import (
     _precompute_dynamic_basis,
     get_device,
     preferred_dtype,
+    propagate_peak,
     stationary_distribution,
 )
 from .torch_optimizer import (
@@ -250,7 +251,7 @@ class BatchedProtocolSimulator:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         initial_state=None,
     ):
         self.params = params
@@ -310,25 +311,18 @@ class BatchedProtocolSimulator:
         self, P_batch: torch.Tensor, V: float, total_dt: float
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Propagate with n_peak_steps substeps, tracking peak open probability.
+        Propagate, sampling the open probability n_peak_steps times per
+        octave (see torch_simulator.propagate_peak).
 
         Returns
         -------
         P_final : (P, n_states)
-        peak    : (P,)  — max open probability over all substeps
+        peak    : (P,)  — max open probability over all samples
         """
-        n = self.n_peak_steps
-        dt_sub = total_dt / n
-        M = self._expm_batch(self._Q_batch(V) * dt_sub)  # (P, n, n) — computed once
-
-        open_probs = [P_batch[:, self._open_idx].sum(dim=1)]  # initial
-        cur = P_batch
-        for _ in range(n):
-            cur = torch.bmm(M, cur.unsqueeze(-1)).squeeze(-1)
-            open_probs.append(cur[:, self._open_idx].sum(dim=1))
-
-        peak = torch.stack(open_probs, dim=0).max(dim=0).values  # (P,)
-        return cur, peak
+        return propagate_peak(
+            self._expm_batch, self._Q_batch(V), P_batch, total_dt,
+            self._open_idx, self.n_peak_steps,
+        )
 
     def _open(self, P_batch: torch.Tensor) -> torch.Tensor:
         """(P,) — total open probability for each member."""
@@ -508,7 +502,7 @@ class TorchDEOptimizer:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,
@@ -746,7 +740,7 @@ class TorchPipelineOptimizer:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,
