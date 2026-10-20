@@ -512,9 +512,19 @@ class TorchDEOptimizer:
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         self.exp = experimental_data
         self.w = weights or dict(self._DEFAULT_WEIGHTS)
+        # Resting-inactivation penalty, as in TorchCostFunction.
+        self.rest_lambda = rest_lambda
+        self.v_rest = v_rest
+        self._inact_idx = (
+            [i for i, s in enumerate(msm_def.states) if s.state_type == "inactivated"]
+            if msm_def is not None
+            else []
+        )
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -557,6 +567,9 @@ class TorchDEOptimizer:
             loss = loss + self.reg_lambda * prior_penalty(
                 params_free, self._reg_prior, lb, ub, log_mask
             )
+        if self.rest_lambda > 0.0 and self._inact_idx:
+            p_rest = stationary_distribution(sim._Q_batch(self.v_rest))  # (P, n)
+            loss = loss + self.rest_lambda * p_rest[:, self._inact_idx].sum(dim=1) ** 2
         return loss
 
     def optimize(
@@ -722,6 +735,8 @@ class TorchPipelineOptimizer:
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         device = device or get_device()
         dtype = dtype or preferred_dtype(device)
@@ -740,6 +755,8 @@ class TorchPipelineOptimizer:
             device=device,
             dtype=dtype,
             reg_lambda=reg_lambda,
+            rest_lambda=rest_lambda,
+            v_rest=v_rest,
         )
 
         self._de = TorchDEOptimizer(**_common)
@@ -759,6 +776,8 @@ class TorchPipelineOptimizer:
             device=device,
             dtype=dtype,
             reg_lambda=reg_lambda,
+            rest_lambda=rest_lambda,
+            v_rest=v_rest,
         )
         self._torch_cost = TorchCostFunction(**_local_kw)
         self._local = TorchParameterOptimizer(self._torch_cost)

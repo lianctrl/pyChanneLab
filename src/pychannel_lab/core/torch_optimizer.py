@@ -30,6 +30,7 @@ from .torch_simulator import (
     TorchProtocolSimulator,
     get_device,
     preferred_dtype,
+    stationary_distribution,
 )
 from .param_transform import (
     to_raw as _pt_to_raw,
@@ -88,10 +89,22 @@ class TorchCostFunction:
         device: torch.device = None,
         dtype: torch.dtype = None,
         reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
         self.reg_lambda = reg_lambda
+        # Penalty on the inactivated fraction at rest: normalised data cannot
+        # pin resting availability, so without it the fit may leave a large,
+        # unphysical fraction of channels inactivated at v_rest.
+        self.rest_lambda = rest_lambda
+        self.v_rest = v_rest
+        self._inact_idx = (
+            [i for i, s in enumerate(msm_def.states) if s.state_type == "inactivated"]
+            if msm_def is not None
+            else []
+        )
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -204,6 +217,10 @@ class TorchCostFunction:
             loss = loss + self.reg_lambda * prior_penalty(
                 params, self._reg_prior, self._reg_lb, self._reg_ub, self._reg_logmask
             )
+
+        if self.rest_lambda > 0.0 and self._inact_idx:
+            p_rest = stationary_distribution(sim._Q(self.v_rest))
+            loss = loss + self.rest_lambda * p_rest[self._inact_idx].sum() ** 2
 
         return loss
 
