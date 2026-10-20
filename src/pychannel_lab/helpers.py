@@ -436,6 +436,8 @@ def generate_run_script() -> str:
     _n_lbfgs = int(ss.get("opt_lbfgs", 200))
     _n_peak_steps = int(ss.get("opt_peak_steps", 50))
     _reg_lambda = float(ss.get("opt_reg_lambda", 0.0))
+    _de_strategy = str(ss.get("opt_de_strategy", "adaptive"))
+    _n_starts = int(ss.get("opt_n_starts", 5))
 
     def cfg_kwargs(cfg) -> str:
         return ", ".join(
@@ -575,6 +577,8 @@ def generate_run_script() -> str:
     w(f"N_LBFGS      = {_n_lbfgs}")
     w(f"N_PEAK_STEPS = {_n_peak_steps}")
     w(f"REG_LAMBDA   = {_reg_lambda}")
+    w(f"DE_STRATEGY  = {_de_strategy!r}")
+    w(f"N_STARTS     = {_n_starts}")
     w()
 
     # --- Progress callback (written into the generated script) ----------------
@@ -654,6 +658,8 @@ def generate_run_script() -> str:
     w("        n_lbfgs=N_LBFGS,")
     w("        skip_de=not RUN_GLOBAL,")
     w("        initial_params=msm_def.free_initial_guess if not RUN_GLOBAL else None,")
+    w("        strategy=DE_STRATEGY,")
+    w("        n_starts=N_STARTS,")
     w("        progress_callback=progress_cb,")
     w("    )")
     w("    fitted_params = msm_def.expand_params(result.x)")

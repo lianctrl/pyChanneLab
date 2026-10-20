@@ -559,24 +559,35 @@ class TorchDEOptimizer:
         F: float = 0.8,
         CR: float = 0.9,
         progress_callback: Optional[Callable] = None,
+        strategy: str = "adaptive",
         log_mask: Optional[list] = None,
-    ) -> np.ndarray:
+        return_population: bool = False,
+        p_best: float = 0.2,
+    ):
         """
-        Run DE/rand/1/bin and return best free-parameter vector as numpy array.
+        Run Differential Evolution and return the best free-parameter vector.
 
         Parameters
         ----------
         bounds    : [(lb, ub), …]  one per free parameter
         pop_size  : population size P
         maxiter   : number of generations
-        F         : differential weight  (mutation scale, typically 0.5-0.9)
-        CR        : crossover probability (typically 0.7-1.0)
+        F         : differential weight (used only by the fixed 'rand1' strategy)
+        CR        : crossover probability (used only by 'rand1')
+        strategy  : 'adaptive' — JADE-style DE/current-to-pbest/1 with
+                    self-adapting F/CR (default, more robust);
+                    'rand1'    — classic fixed-F/CR DE/rand/1/bin.
         log_mask  : per-free-parameter log-scale flags (e.g.
                     ``msm_def.free_log_mask``).  None → inferred from bounds.
+        return_population : if True, also return the whole final population
+                    (free params) sorted best-first, for multi-start polishing.
+        p_best    : fraction of the population treated as "pbest" élite in the
+                    adaptive strategy.
 
         Returns
         -------
-        best_params_free : np.ndarray shape (n_free,)
+        best_params_free : np.ndarray (n_free,)
+        or, if return_population: (best_params_free, population_free_sorted (P, n_free), fitness_sorted (P,))
         """
         device, dtype = self.device, self.dtype
         n = len(bounds)
@@ -598,15 +609,43 @@ class TorchDEOptimizer:
             fitness = self._eval_population(raw, lb, ub, mask)  # (P,)
         fitness = torch.nan_to_num(fitness, nan=1e6, posinf=1e6)
 
-        for gen in range(maxiter):
-            # Mutation: DE/rand/1 — three distinct random permutations
-            r1 = torch.randperm(P, device=device)
-            r2 = torch.randperm(P, device=device)
-            r3 = torch.randperm(P, device=device)
-            mutant = raw[r1] + F * (raw[r2] - raw[r3])  # (P, n)
+        adaptive = strategy == "adaptive"
+        mu_F, mu_CR = 0.5, 0.5  # JADE adaptation means
+        n_pbest = max(2, int(round(p_best * P)))
 
-            # Crossover: binomial with guaranteed minimum one mutant gene
-            cross = torch.rand(P, n, dtype=dtype, device=device) < CR
+        for gen in range(maxiter):
+            if adaptive:
+                # Per-member control parameters (JADE): F ~ Cauchy(mu_F,0.1),
+                # CR ~ Normal(mu_CR,0.1).
+                F_i = (
+                    torch.distributions.Cauchy(mu_F, 0.1)
+                    .sample((P,))
+                    .to(device=device, dtype=dtype)
+                    .clamp(0.05, 1.0)
+                )
+                CR_i = (
+                    (mu_CR + 0.1 * torch.randn(P, device=device, dtype=dtype))
+                    .clamp(0.0, 1.0)
+                )
+                # DE/current-to-pbest/1: pull toward a random élite member.
+                elite_order = torch.argsort(fitness)[:n_pbest]
+                pbest_pick = elite_order[torch.randint(n_pbest, (P,), device=device)]
+                r1 = torch.randint(P, (P,), device=device)
+                r2 = torch.randint(P, (P,), device=device)
+                Fc = F_i.unsqueeze(1)
+                mutant = (
+                    raw + Fc * (raw[pbest_pick] - raw) + Fc * (raw[r1] - raw[r2])
+                )
+                cross = torch.rand(P, n, dtype=dtype, device=device) < CR_i.unsqueeze(1)
+            else:
+                # Classic DE/rand/1 with fixed F/CR.
+                r1 = torch.randperm(P, device=device)
+                r2 = torch.randperm(P, device=device)
+                r3 = torch.randperm(P, device=device)
+                mutant = raw[r1] + F * (raw[r2] - raw[r3])
+                cross = torch.rand(P, n, dtype=dtype, device=device) < CR
+
+            # Guarantee at least one mutant gene per trial.
             j_rand = torch.randint(n, (P,), device=device)
             cross[torch.arange(P, device=device), j_rand] = True
             trial = torch.where(cross, mutant, raw)  # (P, n)
@@ -615,18 +654,33 @@ class TorchDEOptimizer:
                 trial_fitness = self._eval_population(trial, lb, ub, mask)  # (P,)
             trial_fitness = torch.nan_to_num(trial_fitness, nan=1e6, posinf=1e6)
 
-            # Selection: keep trial if it improves fitness
+            # Selection: keep trial if it improves fitness.
             better = trial_fitness < fitness
             raw = torch.where(better.unsqueeze(1), trial, raw)
             fitness = torch.where(better, trial_fitness, fitness)
 
+            if adaptive and bool(better.any()):
+                # Update adaptation means from the successful control params.
+                succ_F = F_i[better]
+                succ_CR = CR_i[better]
+                # Lehmer mean for F, arithmetic mean for CR (JADE).
+                lehmer = float((succ_F ** 2).sum() / succ_F.sum().clamp_min(1e-12))
+                mu_F = 0.9 * mu_F + 0.1 * lehmer
+                mu_CR = 0.9 * mu_CR + 0.1 * float(succ_CR.mean())
+
             if progress_callback and (gen % 5 == 0 or gen == maxiter - 1):
                 progress_callback(gen + 1, float(fitness.min()), None)
 
-        best_idx = int(fitness.argmin())
-        best_raw = raw[best_idx : best_idx + 1]  # (1, n)
-        best_free = _from_raw_batch(best_raw, lb, ub, mask).squeeze(0)
-        return best_free.cpu().numpy()
+        order = torch.argsort(fitness)
+        best_free = _from_raw_batch(raw[order[:1]], lb, ub, mask).squeeze(0)
+        if not return_population:
+            return best_free.cpu().numpy()
+        pop_sorted = _from_raw_batch(raw[order], lb, ub, mask)  # (P, n)
+        return (
+            best_free.cpu().numpy(),
+            pop_sorted.cpu().numpy(),
+            fitness[order].cpu().numpy(),
+        )
 
 
 # ─── full pipeline: DE → Adam → L-BFGS ──────────────────────────────────────
@@ -715,6 +769,8 @@ class TorchPipelineOptimizer:
         progress_callback: Optional[Callable] = None,
         skip_de: bool = False,
         initial_params: Optional[np.ndarray] = None,
+        strategy: str = "adaptive",
+        n_starts: int = 5,
     ) -> OptimizeResult:
         """
         Run the full pipeline.
@@ -724,14 +780,18 @@ class TorchPipelineOptimizer:
         bounds         : [(lb, ub), …] for free parameters only
         pop_size       : DE population size
         de_maxiter     : DE generations
-        F              : DE mutation scale
-        CR             : DE crossover probability
+        F              : DE mutation scale ('rand1' strategy only)
+        CR             : DE crossover probability ('rand1' strategy only)
         n_adam         : Adam steps
         adam_lr        : Adam learning rate
         n_lbfgs        : L-BFGS outer steps
         skip_de        : if True, skip DE and start local optimisation from
                          *initial_params* (or the MSM initial guess if None)
         initial_params : starting point when skip_de=True (free params, numpy array)
+        strategy       : DE strategy, 'adaptive' (JADE) or 'rand1' (classic).
+        n_starts       : number of top DE members to polish with Adam→L-BFGS;
+                         the lowest-cost polished result wins.  n_starts=1 keeps
+                         the old best-only behaviour.
 
         Returns
         -------
@@ -742,10 +802,13 @@ class TorchPipelineOptimizer:
         # and local optimisers infer it from the bounds when no MSM is present.
         log_mask = self._msm_def.free_log_mask if self._msm_def is not None else None
 
+        # Candidate starting points for the local phase (best-first).
+        starts = []
+
         if skip_de:
             if initial_params is None:
                 raise ValueError("initial_params must be provided when skip_de=True")
-            best_free = np.asarray(initial_params, dtype=float)
+            starts = [np.asarray(initial_params, dtype=float)]
         else:
 
             def _de_cb(iteration: int, cost: float, convergence):
@@ -754,32 +817,42 @@ class TorchPipelineOptimizer:
                     progress_callback(iteration, cost, convergence)
 
             # ── Phase 1: DE ──────────────────────────────────────────────────
-            best_free = self._de.optimize(
+            best_free, pop_sorted, _fit = self._de.optimize(
                 bounds=bounds,
                 pop_size=pop_size,
                 maxiter=de_maxiter,
                 F=F,
                 CR=CR,
+                strategy=strategy,
                 log_mask=log_mask,
+                return_population=True,
                 progress_callback=_de_cb,
             )
+            k = max(1, min(int(n_starts), pop_sorted.shape[0]))
+            starts = [pop_sorted[i] for i in range(k)]
 
-        # ── Phases 2+3: Adam → L-BFGS ────────────────────────────────────────
+        # ── Phases 2+3: Adam → L-BFGS, polished from each candidate start ────
         def _local_cb(iteration: int, cost: float, convergence):
             if progress_callback:
                 progress_callback(de_gen[0] + iteration, cost, convergence)
 
-        result = self._local.optimize(
-            initial_guess=best_free,
-            bounds=bounds,
-            n_adam=n_adam,
-            adam_lr=adam_lr,
-            n_lbfgs=n_lbfgs,
-            progress_callback=_local_cb,
-            log_mask=log_mask,
-        )
+        best_result = None
+        for si, x0 in enumerate(starts):
+            # Only the first (best) start streams progress, to keep the log clean.
+            cb = _local_cb if si == 0 else None
+            res = self._local.optimize(
+                initial_guess=x0,
+                bounds=bounds,
+                n_adam=n_adam,
+                adam_lr=adam_lr,
+                n_lbfgs=n_lbfgs,
+                progress_callback=cb,
+                log_mask=log_mask,
+            )
+            if best_result is None or res.fun < best_result.fun:
+                best_result = res
 
-        return result
+        return best_result
 
     def cost_breakdown(self, params_free_np: np.ndarray) -> dict:
         """Per-protocol cost breakdown for the given free-parameter vector."""

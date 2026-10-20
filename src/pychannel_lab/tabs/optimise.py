@@ -90,6 +90,30 @@ def render() -> None:
             format="%.2f",
             key="opt_de_CR",
         )
+        colA, colB = st.columns(2)
+        de_strategy = colA.selectbox(
+            "DE strategy",
+            options=["adaptive", "rand1"],
+            index=0,
+            key="opt_de_strategy",
+            help=(
+                "adaptive: JADE-style DE/current-to-pbest/1 with self-adapting "
+                "F/CR (more robust, ignores the fixed F/CR above). "
+                "rand1: classic DE/rand/1/bin with the fixed F/CR."
+            ),
+        )
+        n_starts = colB.number_input(
+            "Local multi-starts (top-K)",
+            value=5,
+            min_value=1,
+            max_value=50,
+            step=1,
+            key="opt_n_starts",
+            help=(
+                "Polish the K best DE members with Adam → L-BFGS and keep the "
+                "lowest-cost result. Higher K is more robust but slower."
+            ),
+        )
     else:
         st.info(
             "Skipping DE — local refinement will start from the initial parameter guess."
@@ -98,6 +122,8 @@ def render() -> None:
         de_maxiter = 0
         de_F = 0.8
         de_CR = 0.9
+        de_strategy = "adaptive"
+        n_starts = 1
 
     st.markdown("**Adam (warm-up)**")
     col5, col6 = st.columns(2)
@@ -279,6 +305,8 @@ def render() -> None:
             progress_callback=_cb,
             skip_de=not run_global,
             initial_params=defn.free_initial_guess if not run_global else None,
+            strategy=de_strategy,
+            n_starts=int(n_starts),
         )
 
         ss.opt_costs_final = pipeline.cost_breakdown(result.x)

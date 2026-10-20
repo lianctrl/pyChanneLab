@@ -357,11 +357,23 @@ class TorchParameterOptimizer:
                 last_loss[0] = loss.detach().item()
                 return loss
 
+            prev_loss = float("inf")
+            stall = 0
             for outer in range(n_lbfgs):
                 lbfgs.step(closure)
                 total_iters[0] += 1
                 if progress_callback and (outer % 5 == 0 or outer == n_lbfgs - 1):
                     progress_callback(total_iters[0], last_loss[0], None)
+                # Early stop once L-BFGS has plateaued: strong-Wolfe L-BFGS
+                # converges quadratically, so continuing past the plateau just
+                # burns time (important for the multi-start polish).
+                if abs(prev_loss - last_loss[0]) <= 1e-10 * (1.0 + abs(last_loss[0])):
+                    stall += 1
+                    if stall >= 3:
+                        break
+                else:
+                    stall = 0
+                prev_loss = last_loss[0]
 
         final_params = get_params().detach().cpu().numpy()
         final_cost = self.cost.total_cost_numpy(final_params)
