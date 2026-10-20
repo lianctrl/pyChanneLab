@@ -200,3 +200,6 @@ __marimo__/
 .claude/
 # Added by code-review-graph
 .code-review-graph/
+
+# Example fit outputs (PNGs/logs from examples/fit_wt.py)
+examples/output/
