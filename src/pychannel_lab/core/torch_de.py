@@ -38,6 +38,7 @@ from .torch_simulator import (
     _precompute_dynamic_basis,
     get_device,
     preferred_dtype,
+    stationary_distribution,
 )
 from .torch_optimizer import (
     OptimizeResult,
@@ -333,12 +334,18 @@ class BatchedProtocolSimulator:
         """(P,) — total open probability for each member."""
         return P_batch[:, self._open_idx].sum(dim=1)
 
+    def _start(self, cfg) -> torch.Tensor:
+        """(P, n) sweep start: per-member steady state at cfg.v_hold, or s0."""
+        if cfg.steady_state_start:
+            return stationary_distribution(self._Q_batch(cfg.v_hold))
+        return self.s0
+
     # ── per-protocol MSE losses ───────────────────────────────────────────────
 
     def activation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """Weighted-normalised MSE for all P members. Returns (P,)."""
         cfg = self.act_proto.cfg
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
 
         peaks = []
         for V in x_data.tolist():
@@ -354,7 +361,7 @@ class BatchedProtocolSimulator:
     def inactivation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         cfg = self.inact_proto.cfg
         t_test_dur = max(self.t_total - cfg.t_hold - cfg.t_cond, 1e-3)
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
 
         currents = []
         for V_cond in x_data.tolist():
@@ -377,9 +384,10 @@ class BatchedProtocolSimulator:
         cfg = self.csi_proto.cfg
         t_initial = cfg.t_initial
 
-        _, baseline_peak = self._prop_peak(self.s0, cfg.v_hold, t_initial)
+        s_start = self._start(cfg)
+        _, baseline_peak = self._prop_peak(s_start, cfg.v_hold, t_initial)
         baseline_peak = baseline_peak.clamp(min=1e-12)
-        P_after = self._prop(self.s0, cfg.v_hold, t_initial)
+        P_after = self._prop(s_start, cfg.v_hold, t_initial)
 
         currents = []
         for t_pulse in x_sim.tolist():
@@ -399,7 +407,7 @@ class BatchedProtocolSimulator:
     def recovery_loss(self, x_sim: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """x_sim: absolute test-pulse start times in seconds."""
         cfg = self.rec_proto.cfg
-        P0 = self._prop(self.s0, cfg.v_hold, cfg.t_prep)
+        P0 = self._prop(self._start(cfg), cfg.v_hold, cfg.t_prep)
         P_inact, g_pre = self._prop_peak(P0, cfg.v_depo, cfg.t_pulse - cfg.t_prep)
         g_pre = g_pre.clamp(min=1e-12)
 

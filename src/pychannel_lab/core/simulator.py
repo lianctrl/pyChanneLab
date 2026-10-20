@@ -33,6 +33,15 @@ from .protocols import (
 from .config import CustomProtocolConfig
 
 
+def stationary_distribution(Q: np.ndarray) -> np.ndarray:
+    """NumPy twin of torch_simulator.stationary_distribution: Q p = 0, Σp = 1."""
+    A = np.vstack([Q[:-1], np.ones((1, Q.shape[1]))])
+    b = np.zeros(Q.shape[0])
+    b[-1] = 1.0
+    p = np.clip(np.linalg.solve(A, b), 0.0, None)
+    return p / p.sum()
+
+
 class ProtocolSimulator:
     """
     Run voltage-clamp protocols and extract normalised observables.
@@ -110,7 +119,15 @@ class ProtocolSimulator:
             return _build_Q_11state(self.params, V)
         return self.model.build_Q(V)
 
-    def _simulate(self, voltage_func: Callable) -> Tuple[np.ndarray, np.ndarray]:
+    def _start(self, cfg) -> np.ndarray:
+        """State at the start of a sweep: steady state at cfg.v_hold, or s0."""
+        if cfg.steady_state_start:
+            return stationary_distribution(self._build_Q(cfg.v_hold))
+        return self.s0
+
+    def _simulate(
+        self, voltage_func: Callable, P0: np.ndarray = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Step-wise matrix-exponential propagation: P(t+dt) = expm(Q(V)·dt) @ P(t).
 
         expm(Q(V)·dt) is cached per unique voltage value.  All four protocols are
@@ -119,7 +136,7 @@ class ProtocolSimulator:
         """
         t = self._time_array()
         dt = self.dt
-        P = self.s0.copy()
+        P = (self.s0 if P0 is None else P0).copy()
         states = np.zeros((len(t), len(P)))
         states[0] = P
 
@@ -160,10 +177,11 @@ class ProtocolSimulator:
 
         i0 = self._idx(proto.t_pulse_start)
         i1 = self._idx(proto.t_pulse_end)
+        P0 = self._start(proto.cfg)
 
         conductances = np.zeros(len(test_voltages))
         for i, V in enumerate(test_voltages):
-            _, states = self._simulate(proto.get_voltage_function(V))
+            _, states = self._simulate(proto.get_voltage_function(V), P0)
             conductances[i] = self.g_k_max * self._peak_open(states, i0, i1)
 
         mx = np.max(conductances)
@@ -177,10 +195,11 @@ class ProtocolSimulator:
         v_depo = proto.cfg.v_depo
         v_hold = proto.cfg.v_hold
         i_test = self._idx(proto.t_test_start)
+        P0 = self._start(proto.cfg)
 
         currents = np.zeros(len(test_voltages))
         for i, V in enumerate(test_voltages):
-            _, states = self._simulate(proto.get_voltage_function(V))
+            _, states = self._simulate(proto.get_voltage_function(V), P0)
             baseline = self._open_at(states, i_test - 1)
             peak = float(np.max(states[i_test:, self._open_idx].sum(axis=1)))
             g = self.g_k_max * (peak - baseline)
@@ -197,10 +216,11 @@ class ProtocolSimulator:
         i_prep = self._idx(proto.cfg.t_initial)
         v_depo = proto.cfg.v_depo
         v_prep = proto.cfg.v_prep
+        P0 = self._start(proto.cfg)
 
         currents = np.zeros(len(test_times))
         for i, t_pulse in enumerate(test_times):
-            _, states = self._simulate(proto.get_voltage_function(t_pulse))
+            _, states = self._simulate(proto.get_voltage_function(t_pulse), P0)
             i_pulse = self._idx(t_pulse)
             baseline_max = float(
                 np.max(states[0 : i_prep + 1, self._open_idx].sum(axis=1))
@@ -223,10 +243,11 @@ class ProtocolSimulator:
         i_pre_start = self._idx(cfg.t_prep)
         i_pre_end = self._idx(cfg.t_pulse)
         v_depo, v_hold = cfg.v_depo, cfg.v_hold
+        P0 = self._start(cfg)
 
         ratios = np.zeros(len(test_times))
         for i, t_rec_end in enumerate(test_times):
-            _, states = self._simulate(proto.get_voltage_function(t_rec_end))
+            _, states = self._simulate(proto.get_voltage_function(t_rec_end), P0)
             g_pre = self.g_k_max * self._peak_open(states, i_pre_start, i_pre_end)
             g_test = self.g_k_max * float(
                 np.max(states[self._idx(t_rec_end) :, self._open_idx].sum(axis=1))
@@ -283,7 +304,13 @@ class ProtocolSimulator:
 
             for i, sv in enumerate(sweep_vals):
                 vf = proto.get_voltage_function(sv)
-                _, states = self._simulate(vf)
+                # Holding potential = first segment of this sweep.
+                P0 = (
+                    stationary_distribution(self._build_Q(vf(0.0)))
+                    if cfg.steady_state_start
+                    else None
+                )
+                _, states = self._simulate(vf, P0)
                 n = len(states)
 
                 t0_obs, t1_obs = proto.obs_window(sv)

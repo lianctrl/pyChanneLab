@@ -214,6 +214,25 @@ def build_Q_dynamic(
     return torch.einsum("t,tij->ij", rates, basis.to(device=device))
 
 
+def stationary_distribution(Q: torch.Tensor) -> torch.Tensor:
+    """Stationary distribution p of a generator (dP/dt = Q P): Q p = 0, Σp = 1.
+
+    The columns of Q sum to zero, so one balance equation is redundant; it is
+    replaced by the normalisation row and the linear system is solved directly.
+    Differentiable, and batched over leading dims: (n, n) -> (n,),
+    (P, n, n) -> (P, n).
+    """
+    if Q.device.type == "mps":  # no MPS kernel for linalg.solve; mirror _expm
+        return stationary_distribution(Q.cpu()).to(Q.device)
+    A = torch.cat([Q[..., :-1, :], torch.ones_like(Q[..., :1, :])], dim=-2)
+    b = torch.zeros_like(Q[..., :, 0])
+    b[..., -1] = 1.0
+    p = torch.linalg.solve(A, b.unsqueeze(-1)).squeeze(-1)
+    # Round-off can leave tiny negative entries; clip and renormalise.
+    p = p.clamp_min(0.0)
+    return p / p.sum(dim=-1, keepdim=True)
+
+
 class TorchProtocolSimulator:
     """
     Matrix-exponential simulator for all four voltage-clamp protocols.
@@ -317,6 +336,12 @@ class TorchProtocolSimulator:
     def _open_prob(self, P: torch.Tensor) -> torch.Tensor:
         return P[self._open_idx].sum()
 
+    def _start(self, cfg) -> torch.Tensor:
+        """State at the start of a sweep: steady state at cfg.v_hold, or s0."""
+        if cfg.steady_state_start:
+            return stationary_distribution(self._Q(cfg.v_hold))
+        return self.s0
+
     def run_activation(self, test_voltages=None) -> torch.Tensor:
         proto = self.act_proto
         if test_voltages is None:
@@ -324,7 +349,7 @@ class TorchProtocolSimulator:
 
         cfg = proto.cfg
         # Single exact propagation through the common holding phase
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
 
         conductances = []
         for V in test_voltages:
@@ -341,7 +366,7 @@ class TorchProtocolSimulator:
             test_voltages = proto.get_test_voltages()
 
         cfg = proto.cfg
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
         t_test_dur = max(self.t_total - cfg.t_hold - cfg.t_cond, 1e-3)
 
         currents = []
@@ -365,9 +390,10 @@ class TorchProtocolSimulator:
         t_initial = cfg.t_initial
 
         # Baseline: peak open probability during initial hold
-        _, baseline_peak = self._prop_peak(self.s0, cfg.v_hold, t_initial)
+        s_start = self._start(cfg)
+        _, baseline_peak = self._prop_peak(s_start, cfg.v_hold, t_initial)
         baseline_peak = baseline_peak.clamp(min=1e-12)
-        P_after_initial = self._prop(self.s0, cfg.v_hold, t_initial)
+        P_after_initial = self._prop(s_start, cfg.v_hold, t_initial)
 
         currents = []
         for t_pulse in test_times:
@@ -392,7 +418,7 @@ class TorchProtocolSimulator:
         t_pulse = cfg.t_pulse
 
         # Equilibrate then apply inactivating pulse, tracking peak
-        P0 = self._prop(self.s0, cfg.v_hold, t_prep)
+        P0 = self._prop(self._start(cfg), cfg.v_hold, t_prep)
         P_inact, g_pre = self._prop_peak(P0, cfg.v_depo, t_pulse - t_prep)
         g_pre = g_pre.clamp(min=1e-12)
 

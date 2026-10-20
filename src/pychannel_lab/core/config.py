@@ -113,6 +113,9 @@ class ActivationConfig:
     v_step: float = 10.0  # mV — voltage step
     t_hold: float = 0.50  # s  — duration of holding phase
     t_test: float = 0.05  # s  — duration of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -127,6 +130,9 @@ class InactivationConfig:
     t_hold: float = 0.50  # s  — initial holding
     t_cond: float = 1.00  # s  — conditioning pulse duration
     # test pulse lasts until end of simulation
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -141,6 +147,9 @@ class CSInactivationConfig:
     max_pulse: float = 0.580  # s  — longest  prepulse (after t_initial)
     pulse_increment: float = 0.030  # s
     t_test_end: float = 1.150  # s  — absolute end of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -155,6 +164,9 @@ class RecoveryConfig:
     max_interval: float = 0.570  # s  — longest  recovery interval
     interval_increment: float = 0.030  # s
     t_end: float = 2.650  # s  — absolute end of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -207,3 +219,7 @@ class CustomProtocolConfig:
     obs_ref_window_length: float | None = None
 
     enabled: bool = True  # include in optimisation cost
+
+    # Start each sweep from the steady state at the first segment's voltage
+    # (the holding potential) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
