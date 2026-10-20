@@ -331,3 +331,73 @@ class TestDEvsLocal:
         assert (
             best_cost < local_result.fun - 0.5
         ), f"Broad search ({best_cost:.3f}) not better than local ({local_result.fun:.3f})"
+
+
+# ── Test D: seeding makes the pipeline reproducible ──────────────────────────
+
+
+class TestSeedReproducibility:
+    """
+    Passing the same ``seed`` to TorchPipelineOptimizer.optimize must yield an
+    identical result — DE is the only stochastic stage, so seeding the global
+    torch RNG once fixes the whole pipeline.
+    """
+
+    def _make_pipeline_and_bounds(self):
+        from core.msm_builder import MSMDefinition, StateSpec, TransitionSpec, ParamSpec
+        from core.config import ActivationConfig
+        from core.simulator import ProtocolSimulator
+
+        TRUE = [5.0, 2.0, 5.0, 2.0]
+        act_cfg = ActivationConfig(
+            v_hold=-90.0, v_tail=-90.0, v_min=-60.0, v_max=60.0,
+            v_step=20.0, t_hold=0.10, t_test=0.20,
+        )
+        t_total = 0.31
+
+        def make_msm(init):
+            return MSMDefinition(
+                states=[StateSpec("C", "closed"), StateSpec("O", "open")],
+                transitions=[
+                    TransitionSpec("C", "O", "alpha_0 * exp( alpha_1 * V * EXP_FACTOR)"),
+                    TransitionSpec("O", "C", "beta_0  * exp(-beta_1  * V * EXP_FACTOR)"),
+                ],
+                parameters=[
+                    ParamSpec("alpha_0", init[0], 0.01, 200.0),
+                    ParamSpec("alpha_1", init[1], 0.01, 5.0),
+                    ParamSpec("beta_0", init[2], 0.01, 200.0),
+                    ParamSpec("beta_1", init[3], 0.01, 5.0),
+                ],
+            )
+
+        msm_true = make_msm(TRUE)
+        sim_true = ProtocolSimulator(
+            np.array(TRUE), msm_def=msm_true, act_cfg=act_cfg, t_total=t_total,
+            dt=5e-4, g_k_max=1.0, initial_state=np.array([1.0, 0.0]),
+        )
+        x_act = sim_true.act_proto.get_test_voltages()
+        y_act = sim_true.run_activation()
+        exp_data = {"activation": (x_act, y_act, None), "inactivation": None,
+                    "cs_inactivation": None, "recovery": None}
+
+        msm_opt = make_msm([0.5, 0.5, 0.5, 0.5])
+        pipeline = TorchPipelineOptimizer(
+            exp_data, weights={"activation": 1.0}, msm_def=msm_opt,
+            act_cfg=act_cfg, t_total=t_total, n_peak_steps=10,
+            device=torch.device("cpu"), dtype=torch.float64,
+        )
+        return pipeline, list(msm_opt.free_bounds)
+
+    def test_same_seed_same_result(self):
+        pipe1, bounds = self._make_pipeline_and_bounds()
+        pipe2, _ = self._make_pipeline_and_bounds()
+        kw = dict(
+            bounds=bounds, pop_size=16, de_maxiter=15, n_adam=30,
+            adam_lr=0.05, n_lbfgs=10, n_starts=2, seed=7,
+        )
+        r1 = pipe1.optimize(**kw)
+        r2 = pipe2.optimize(**kw)
+        assert np.allclose(r1.x, r2.x, rtol=0, atol=1e-9), (
+            f"Same seed gave different params:\n{r1.x}\n{r2.x}"
+        )
+        assert r1.fun == pytest.approx(r2.fun, abs=1e-9)

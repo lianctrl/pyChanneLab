@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from helpers import generate_run_script
+from helpers import generate_run_script, _simulate_all, _comparison_figure
 
 try:
     import torch
@@ -20,6 +20,15 @@ except ImportError:
     _TORCH_AVAILABLE = False
     _torch_device = None
     _torch_dtype = None
+
+
+def _activate_seed(entry: dict) -> None:
+    """Make one multi-seed result the active fit (feeds the Results tab)."""
+    ss = st.session_state
+    ss.fitted_params = entry["params_full"]
+    ss.opt_result = entry["result"]
+    ss.opt_costs_final = entry["breakdown"]
+    ss.active_seed = entry["seed"]
 
 
 def render() -> None:
@@ -200,6 +209,41 @@ def render() -> None:
         key="w_rec",
     )
 
+    st.subheader("Reproducibility")
+    multi_seed = st.toggle(
+        "Multi-seed sweep",
+        value=False,
+        key="opt_multi_seed",
+        help=(
+            "Run the whole pipeline once per random seed and keep every result, "
+            "so you can inspect the different basins and pick the best fit. "
+            "Different seeds can give qualitatively different curves "
+            "(e.g. exponential vs sigmoidal recovery)."
+        ),
+    )
+    if multi_seed:
+        _sc1, _sc2 = st.columns(2)
+        base_seed = int(
+            _sc1.number_input("Base seed", value=42, min_value=0, step=1, key="opt_seed")
+        )
+        n_seeds = int(
+            _sc2.number_input(
+                "Number of seeds",
+                value=3,
+                min_value=1,
+                max_value=5,  # hard cap
+                step=1,
+                key="opt_n_seeds",
+            )
+        )
+        seeds = [base_seed + i for i in range(n_seeds)]
+        st.caption(f"Seeds to run: {seeds}")
+    else:
+        base_seed = int(
+            st.number_input("Random seed", value=42, min_value=0, step=1, key="opt_seed")
+        )
+        seeds = [base_seed]
+
     st.divider()
 
     _frozen = [p for p in ss.msm_def.parameters if p.frozen]
@@ -233,6 +277,7 @@ def render() -> None:
         _adam_steps = int(n_adam)
         _lbfgs_steps = int(n_lbfgs)
         _total_iters = _de_gens + _adam_steps + _lbfgs_steps
+        _n_seeds = len(seeds)
 
         _prog = st.progress(0.0, text="Starting…")
         _mc1, _mc2, _mc3 = st.columns(3)
@@ -242,13 +287,11 @@ def render() -> None:
         _chart = st.empty()
 
         _cost_hist = []
-        _global_iter = [0]
+        _seed_ctx = {"idx": 0, "seed": seeds[0]}
 
         def _cb(iteration, cost, convergence):
-            _global_iter[0] += 1
-            g = _global_iter[0]
-
-            msg = f"Iter {g:5d} | cost = {cost:.6e}"
+            si = _seed_ctx["idx"]
+            msg = f"[seed {_seed_ctx['seed']}] iter {iteration:5d} | cost = {cost:.6e}"
             log.append(msg)
 
             if iteration <= _de_gens:
@@ -258,11 +301,15 @@ def render() -> None:
             else:
                 phase = "L-BFGS"
 
-            pct = min(iteration / max(_total_iters, 1), 1.0)
-            _prog.progress(pct, text=f"{phase}  ·  iter {iteration} / {_total_iters}")
+            seed_label = f"Seed {si + 1}/{_n_seeds}  ·  " if _n_seeds > 1 else ""
+            frac = min(iteration / max(_total_iters, 1), 1.0)
+            pct = (si + frac) / _n_seeds
+            _prog.progress(
+                pct, text=f"{seed_label}{phase}  ·  iter {iteration} / {_total_iters}"
+            )
             _m_iter.metric("Iteration", f"{iteration:,}")
             _m_cost.metric("Cost", f"{cost:.4e}")
-            _m_phase.metric("Phase", phase)
+            _m_phase.metric("Phase", f"{seed_label}{phase}")
 
             _cost_hist.append(math.log10(max(cost, 1e-15)))
             if len(_cost_hist) == 1 or len(_cost_hist) % 5 == 0:
@@ -293,28 +340,85 @@ def render() -> None:
         )
         ss.opt_costs_initial = pipeline.cost_breakdown(defn.free_initial_guess)
 
-        result = pipeline.optimize(
-            bounds=bounds,
-            pop_size=int(pop_size),
-            de_maxiter=_de_gens,
-            F=float(de_F),
-            CR=float(de_CR),
-            n_adam=_adam_steps,
-            adam_lr=float(adam_lr),
-            n_lbfgs=_lbfgs_steps,
-            progress_callback=_cb,
-            skip_de=not run_global,
-            initial_params=defn.free_initial_guess if not run_global else None,
-            strategy=de_strategy,
-            n_starts=int(n_starts),
+        results = []
+        for _i, _s in enumerate(seeds):
+            _seed_ctx["idx"] = _i
+            _seed_ctx["seed"] = _s
+            _res = pipeline.optimize(
+                bounds=bounds,
+                pop_size=int(pop_size),
+                de_maxiter=_de_gens,
+                F=float(de_F),
+                CR=float(de_CR),
+                n_adam=_adam_steps,
+                adam_lr=float(adam_lr),
+                n_lbfgs=_lbfgs_steps,
+                progress_callback=_cb,
+                skip_de=not run_global,
+                initial_params=defn.free_initial_guess if not run_global else None,
+                strategy=de_strategy,
+                n_starts=int(n_starts),
+                seed=int(_s),
+            )
+            results.append(
+                {
+                    "seed": int(_s),
+                    "result": _res,
+                    "params_full": defn.expand_params(_res.x),
+                    "fun": float(_res.fun),
+                    "breakdown": pipeline.cost_breakdown(_res.x),
+                }
+            )
+
+        _prog.progress(1.0, text="Done")
+        ss.multiseed_results = results
+        ss.opt_log = log
+
+        # Activate the best-by-objective run by default (user can re-pick below).
+        best = min(results, key=lambda r: r["fun"])
+        _activate_seed(best)
+        st.success(
+            f"Done! Ran {len(results)} seed(s). "
+            f"Best objective {best['fun']:.6f} (seed {best['seed']})."
         )
 
-        ss.opt_costs_final = pipeline.cost_breakdown(result.x)
-        _prog.progress(1.0, text="Done")
-        ss.fitted_params = defn.expand_params(result.x)
-        ss.opt_result = result
-        ss.opt_log = log
-        st.success(f"Done! Final cost: {result.fun:.6f}")
+    # ── Multi-seed inspection & manual selection ──────────────────────────────
+    _ms = ss.get("multiseed_results", [])
+    if len(_ms) > 1:
+        st.subheader("Multi-seed results")
+        st.caption(
+            "Per-seed fit quality (RMSE = √MSE per protocol; objective = weighted "
+            "cost that was minimised). Pick the seed whose curves look best below — "
+            "lowest objective is not always the best-shaped fit."
+        )
+        _protos = [k for k in ss.exp_data if ss.exp_data.get(k) is not None]
+        _rows = []
+        for r in _ms:
+            row = {"seed": r["seed"], "objective": f"{r['fun']:.6f}"}
+            for pk in _protos:
+                mse = r["breakdown"].get(pk)
+                row[f"RMSE {pk}"] = f"{mse ** 0.5:.4f}" if mse is not None else "—"
+            _rows.append(row)
+        st.dataframe(pd.DataFrame(_rows), width="stretch", hide_index=True)
+
+        _seed_opts = [r["seed"] for r in _ms]
+        _active = ss.get("active_seed", _seed_opts[0])
+        _sel = st.selectbox(
+            "Active seed (its parameters feed the Results tab)",
+            options=_seed_opts,
+            index=_seed_opts.index(_active) if _active in _seed_opts else 0,
+            key="multiseed_select",
+        )
+        _chosen = next(r for r in _ms if r["seed"] == _sel)
+        if ss.get("active_seed") != _sel:
+            _activate_seed(_chosen)
+
+        with st.spinner(f"Simulating seed {_sel}…"):
+            _sim = _simulate_all(_chosen["params_full"])
+        st.plotly_chart(
+            _comparison_figure(_chosen["params_full"], _sim_data=_sim),
+            width="stretch",
+        )
 
     if ss.opt_result is not None:
         ca, cb = st.columns(2)

@@ -771,6 +771,7 @@ class TorchPipelineOptimizer:
         initial_params: Optional[np.ndarray] = None,
         strategy: str = "adaptive",
         n_starts: int = 5,
+        seed: Optional[int] = None,
     ) -> OptimizeResult:
         """
         Run the full pipeline.
@@ -792,11 +793,17 @@ class TorchPipelineOptimizer:
         n_starts       : number of top DE members to polish with Adam→L-BFGS;
                          the lowest-cost polished result wins.  n_starts=1 keeps
                          the old best-only behaviour.
+        seed           : if given, seed the global torch RNG so the run is fully
+                         reproducible.  DE is the only stochastic stage (Adam /
+                         L-BFGS are deterministic given the DE-selected starts),
+                         so seeding once here fixes the whole pipeline.
 
         Returns
         -------
         OptimizeResult with .x (best free params), .fun, .nit
         """
+        if seed is not None:
+            torch.manual_seed(int(seed))
         de_gen = [0]
         # Log-scale mask from the MSM (positive-lower-bound free params); the DE
         # and local optimisers infer it from the bounds when no MSM is present.

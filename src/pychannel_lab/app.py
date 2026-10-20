@@ -46,6 +46,8 @@ def _init_state() -> None:
         "fitted_params": None,
         "opt_costs_initial": None,
         "opt_costs_final": None,
+        "multiseed_results": [],  # list of per-seed fit results (multi-seed sweep)
+        "active_seed": None,  # currently selected seed from a multi-seed sweep
         "curve_fit_types": {},  # {pk: curve_type_key}
         "curve_fix_baseline": {},  # {pk: bool}
         "curve_fix_amplitude": {},  # {pk: bool}
