@@ -13,7 +13,7 @@ import numpy as np
 from scipy.linalg import expm as _matrix_expm
 from typing import Callable, Tuple
 
-from core.config import (
+from .config import (
     INITIAL_CONDITIONS,
     TIME_PARAMS,
     G_K_MAX,
@@ -22,13 +22,24 @@ from core.config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.model import IonChannelModel, build_Q as _build_Q_11state
-from core.protocols import (
+from .model import IonChannelModel, build_Q as _build_Q_11state
+from .protocols import (
     ActivationProtocol,
     InactivationProtocol,
     CSInactivationProtocol,
     RecoveryProtocol,
+    CustomProtocol,
 )
+from .config import CustomProtocolConfig
+
+
+def stationary_distribution(Q: np.ndarray) -> np.ndarray:
+    """NumPy twin of torch_simulator.stationary_distribution: Q p = 0, Σp = 1."""
+    A = np.vstack([Q[:-1], np.ones((1, Q.shape[1]))])
+    b = np.zeros(Q.shape[0])
+    b[-1] = 1.0
+    p = np.clip(np.linalg.solve(A, b), 0.0, None)
+    return p / p.sum()
 
 
 class ProtocolSimulator:
@@ -108,7 +119,15 @@ class ProtocolSimulator:
             return _build_Q_11state(self.params, V)
         return self.model.build_Q(V)
 
-    def _simulate(self, voltage_func: Callable) -> Tuple[np.ndarray, np.ndarray]:
+    def _start(self, cfg) -> np.ndarray:
+        """State at the start of a sweep: steady state at cfg.v_hold, or s0."""
+        if cfg.steady_state_start:
+            return stationary_distribution(self._build_Q(cfg.v_hold))
+        return self.s0
+
+    def _simulate(
+        self, voltage_func: Callable, P0: np.ndarray = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Step-wise matrix-exponential propagation: P(t+dt) = expm(Q(V)·dt) @ P(t).
 
         expm(Q(V)·dt) is cached per unique voltage value.  All four protocols are
@@ -117,7 +136,7 @@ class ProtocolSimulator:
         """
         t = self._time_array()
         dt = self.dt
-        P = self.s0.copy()
+        P = (self.s0 if P0 is None else P0).copy()
         states = np.zeros((len(t), len(P)))
         states[0] = P
 
@@ -158,10 +177,11 @@ class ProtocolSimulator:
 
         i0 = self._idx(proto.t_pulse_start)
         i1 = self._idx(proto.t_pulse_end)
+        P0 = self._start(proto.cfg)
 
         conductances = np.zeros(len(test_voltages))
         for i, V in enumerate(test_voltages):
-            _, states = self._simulate(proto.get_voltage_function(V))
+            _, states = self._simulate(proto.get_voltage_function(V), P0)
             conductances[i] = self.g_k_max * self._peak_open(states, i0, i1)
 
         mx = np.max(conductances)
@@ -175,10 +195,11 @@ class ProtocolSimulator:
         v_depo = proto.cfg.v_depo
         v_hold = proto.cfg.v_hold
         i_test = self._idx(proto.t_test_start)
+        P0 = self._start(proto.cfg)
 
         currents = np.zeros(len(test_voltages))
         for i, V in enumerate(test_voltages):
-            _, states = self._simulate(proto.get_voltage_function(V))
+            _, states = self._simulate(proto.get_voltage_function(V), P0)
             baseline = self._open_at(states, i_test - 1)
             peak = float(np.max(states[i_test:, self._open_idx].sum(axis=1)))
             g = self.g_k_max * (peak - baseline)
@@ -195,10 +216,11 @@ class ProtocolSimulator:
         i_prep = self._idx(proto.cfg.t_initial)
         v_depo = proto.cfg.v_depo
         v_prep = proto.cfg.v_prep
+        P0 = self._start(proto.cfg)
 
         currents = np.zeros(len(test_times))
         for i, t_pulse in enumerate(test_times):
-            _, states = self._simulate(proto.get_voltage_function(t_pulse))
+            _, states = self._simulate(proto.get_voltage_function(t_pulse), P0)
             i_pulse = self._idx(t_pulse)
             baseline_max = float(
                 np.max(states[0 : i_prep + 1, self._open_idx].sum(axis=1))
@@ -221,10 +243,11 @@ class ProtocolSimulator:
         i_pre_start = self._idx(cfg.t_prep)
         i_pre_end = self._idx(cfg.t_pulse)
         v_depo, v_hold = cfg.v_depo, cfg.v_hold
+        P0 = self._start(cfg)
 
         ratios = np.zeros(len(test_times))
         for i, t_rec_end in enumerate(test_times):
-            _, states = self._simulate(proto.get_voltage_function(t_rec_end))
+            _, states = self._simulate(proto.get_voltage_function(t_rec_end), P0)
             g_pre = self.g_k_max * self._peak_open(states, i_pre_start, i_pre_end)
             g_test = self.g_k_max * float(
                 np.max(states[self._idx(t_rec_end) :, self._open_idx].sum(axis=1))
@@ -234,3 +257,86 @@ class ProtocolSimulator:
             ratios[i] = I_test / I_pre if I_pre > 0 else 0.0
 
         return ratios
+
+    def run_custom_protocol(
+        self,
+        cfg: CustomProtocolConfig,
+        sweep_vals: np.ndarray = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Run a segment-based custom protocol and return (sweep_values, normalised_observable).
+
+        Parameters
+        ----------
+        cfg : CustomProtocolConfig
+            Protocol definition (segments, sweep axis, observable window).
+        sweep_vals : array-like, optional
+            Explicit sweep values to use.  Defaults to cfg's sweep_min/max/step.
+            Pass the experimental x-data here when computing cost in the optimiser.
+
+        Returns
+        -------
+        sweep_vals : np.ndarray
+            The values actually used for sweeping.
+        observables : np.ndarray
+            Normalised observable at each sweep value (or raw ratio for obs_type="ratio").
+        """
+        if not cfg.segments:
+            return np.array([]), np.array([])
+
+        proto = CustomProtocol(cfg)
+        if sweep_vals is None:
+            sweep_vals = proto.get_sweep_values()
+        sweep_vals = np.asarray(sweep_vals, dtype=float)
+
+        if len(sweep_vals) == 0:
+            return sweep_vals, np.array([])
+
+        # Ensure the simulation runs long enough for the longest sweep value.
+        max_dur = max(proto.total_duration(sv) for sv in sweep_vals)
+        old_t_total = self.t_total
+        if max_dur > self.t_total:
+            self.t_total = max_dur
+
+        try:
+            observables = np.zeros(len(sweep_vals))
+            n_states_total = len(self._time_array())
+
+            for i, sv in enumerate(sweep_vals):
+                vf = proto.get_voltage_function(sv)
+                # Holding potential = first segment of this sweep.
+                P0 = (
+                    stationary_distribution(self._build_Q(vf(0.0)))
+                    if cfg.steady_state_start
+                    else None
+                )
+                _, states = self._simulate(vf, P0)
+                n = len(states)
+
+                t0_obs, t1_obs = proto.obs_window(sv)
+                i0 = min(self._idx(t0_obs), n - 1)
+                i1 = min(self._idx(t1_obs), n)
+                if i1 <= i0:
+                    i1 = i0 + 1
+
+                peak = self._peak_open(states, i0, i1)
+
+                if cfg.obs_type == "ratio":
+                    t0_ref, t1_ref = proto.ref_window(sv)
+                    r0 = min(self._idx(t0_ref), n - 1)
+                    r1 = min(self._idx(t1_ref), n)
+                    if r1 <= r0:
+                        r1 = r0 + 1
+                    ref = self._peak_open(states, r0, r1)
+                    observables[i] = peak / ref if ref > 0 else 0.0
+                elif cfg.obs_type in ("conductance", "current"):
+                    observables[i] = self.g_k_max * peak
+                else:  # "peak_open"
+                    observables[i] = peak
+        finally:
+            self.t_total = old_t_total
+
+        if cfg.obs_type == "ratio":
+            return sweep_vals, observables  # ratios are not re-normalised
+        mx = np.max(np.abs(observables))
+        return sweep_vals, (observables / mx if mx > 0 else observables)

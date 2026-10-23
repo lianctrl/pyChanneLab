@@ -5,7 +5,7 @@ States: C0-C4 (closed), I0-I4 (inactivated), O (open)
 """
 
 import numpy as np
-from core.config import EXP_FACTOR
+from .config import EXP_FACTOR
 
 
 def build_Q(params: np.ndarray, V: float) -> np.ndarray:

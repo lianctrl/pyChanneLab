@@ -31,7 +31,7 @@ from typing import Callable
 
 import numpy as np
 
-from core.config import EXP_FACTOR
+from .config import EXP_FACTOR
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -58,6 +58,10 @@ class ParamSpec:
     lower_bound: float
     upper_bound: float
     frozen: bool = False
+    # Optimise this parameter on a logarithmic scale.  Rate constants span
+    # several decades, so log-space gives the optimiser uniform resolution
+    # across their whole range.  Requires ``lower_bound > 0``.
+    log_scale: bool = True
 
 
 @dataclass
@@ -116,6 +120,15 @@ class MSMDefinition:
         return np.array(
             [p.initial_value for p in self.parameters if not p.frozen], dtype=float
         )
+
+    @property
+    def free_log_mask(self) -> list:
+        """Per-free-parameter flag: optimise on a log scale? (non-frozen only)."""
+        return [
+            bool(p.log_scale) and p.lower_bound > 0.0
+            for p in self.parameters
+            if not p.frozen
+        ]
 
     def expand_params(self, free_x: np.ndarray) -> np.ndarray:
         """Map a free-param vector back to a full-length param vector.
@@ -419,18 +432,21 @@ def make_11state_preset() -> MSMDefinition:
         TransitionSpec("O", "C4", "k_OC_0 * exp(-k_OC_1 * V * EXP_FACTOR)"),
     ]
 
+    # Lower bounds are strictly positive so every parameter can be optimised on
+    # a log scale (rate scales span decades; the voltage-dependence coefficients
+    # can be very small, e.g. beta_1 ~ 3e-3, so log-space matters there too).
     parameters = [
-        ParamSpec("alpha_0", 204.0, 0.0, 2000.0),
-        ParamSpec("alpha_1", 2.07, 0.0, 5.0),
-        ParamSpec("beta_0", 21.2, 0.0, 100.0),
-        ParamSpec("beta_1", 2.8e-3, 0.0, 5.0),
-        ParamSpec("k_CO_0", 2.8, 0.0, 1000.0),
-        ParamSpec("k_CO_1", 0.343, 0.0, 5.0),
-        ParamSpec("k_OC_0", 37.5, 0.0, 1000.0),
-        ParamSpec("k_OC_1", 1.0e-2, 0.0, 5.0),
-        ParamSpec("k_CI", 94.5, 0.0, 2000.0),
-        ParamSpec("k_IC", 0.24, 0.0, 100.0),
-        ParamSpec("f", 0.44, 0.0, 1.0),
+        ParamSpec("alpha_0", 204.0, 1e-3, 2000.0, log_scale=True),
+        ParamSpec("alpha_1", 2.07, 1e-4, 5.0, log_scale=True),
+        ParamSpec("beta_0", 21.2, 1e-3, 100.0, log_scale=True),
+        ParamSpec("beta_1", 2.8e-3, 1e-4, 5.0, log_scale=True),
+        ParamSpec("k_CO_0", 2.8, 1e-3, 1000.0, log_scale=True),
+        ParamSpec("k_CO_1", 0.343, 1e-4, 5.0, log_scale=True),
+        ParamSpec("k_OC_0", 37.5, 1e-3, 1000.0, log_scale=True),
+        ParamSpec("k_OC_1", 1.0e-2, 1e-4, 5.0, log_scale=True),
+        ParamSpec("k_CI", 94.5, 1e-3, 2000.0, log_scale=True),
+        ParamSpec("k_IC", 0.24, 1e-3, 100.0, log_scale=True),
+        ParamSpec("f", 0.44, 0.01, 1.0, log_scale=True),  # kIC/f**4 terms need f>0
     ]
 
     return MSMDefinition(states=states, transitions=transitions, parameters=parameters)

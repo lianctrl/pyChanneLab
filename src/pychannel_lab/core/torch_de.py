@@ -18,7 +18,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 
-from core.config import (
+from .config import (
     EXP_FACTOR,
     INITIAL_CONDITIONS,
     G_K_MAX,
@@ -27,22 +27,30 @@ from core.config import (
     CSInactivationConfig,
     RecoveryConfig,
 )
-from core.protocols import (
+from .protocols import (
     ActivationProtocol,
     InactivationProtocol,
     CSInactivationProtocol,
     RecoveryProtocol,
 )
-from core.torch_simulator import (
+from .torch_simulator import (
     _get_basis_11,
     _precompute_dynamic_basis,
     get_device,
     preferred_dtype,
+    propagate_peak,
+    stationary_distribution,
 )
-from core.torch_optimizer import (
+from .torch_optimizer import (
     OptimizeResult,
     TorchCostFunction,
     TorchParameterOptimizer,
+)
+from .param_transform import (
+    to_raw as _pt_to_raw,
+    from_raw as _pt_from_raw,
+    build_log_mask,
+    prior_penalty,
 )
 
 # ─── batched Q-matrix builders ────────────────────────────────────────────────
@@ -198,21 +206,22 @@ def _expand_batch(params_free: torch.Tensor, msm_def) -> torch.Tensor:
 
 
 # ─── sigmoid / logit transforms (batched) ────────────────────────────────────
+# Thin wrappers over the shared param_transform helpers so DE, Adam and L-BFGS
+# all use exactly the same bounded<->raw mapping (linear or per-parameter log).
 
 
 def _to_raw_batch(
-    params: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+    params: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
 ) -> torch.Tensor:
-    """Map (P, n) param tensor → logit space. lb/ub : (n,)."""
-    normalized = ((params - lb) / (ub - lb)).clamp(0.001, 0.999)
-    return torch.logit(normalized)
+    """Map (P, n) param tensor → raw space. lb/ub/log_mask : (n,)."""
+    return _pt_to_raw(params, lb, ub, log_mask)
 
 
 def _from_raw_batch(
-    raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+    raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
 ) -> torch.Tensor:
-    """Map (P, n) logit tensor → param space. lb/ub : (n,)."""
-    return lb + (ub - lb) * torch.sigmoid(raw)
+    """Map (P, n) raw tensor → param space. lb/ub/log_mask : (n,)."""
+    return _pt_from_raw(raw, lb, ub, log_mask)
 
 
 # ─── batched protocol simulator ──────────────────────────────────────────────
@@ -242,7 +251,7 @@ class BatchedProtocolSimulator:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         initial_state=None,
     ):
         self.params = params
@@ -302,36 +311,35 @@ class BatchedProtocolSimulator:
         self, P_batch: torch.Tensor, V: float, total_dt: float
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Propagate with n_peak_steps substeps, tracking peak open probability.
+        Propagate, sampling the open probability n_peak_steps times per
+        octave (see torch_simulator.propagate_peak).
 
         Returns
         -------
         P_final : (P, n_states)
-        peak    : (P,)  — max open probability over all substeps
+        peak    : (P,)  — max open probability over all samples
         """
-        n = self.n_peak_steps
-        dt_sub = total_dt / n
-        M = self._expm_batch(self._Q_batch(V) * dt_sub)  # (P, n, n) — computed once
-
-        open_probs = [P_batch[:, self._open_idx].sum(dim=1)]  # initial
-        cur = P_batch
-        for _ in range(n):
-            cur = torch.bmm(M, cur.unsqueeze(-1)).squeeze(-1)
-            open_probs.append(cur[:, self._open_idx].sum(dim=1))
-
-        peak = torch.stack(open_probs, dim=0).max(dim=0).values  # (P,)
-        return cur, peak
+        return propagate_peak(
+            self._expm_batch, self._Q_batch(V), P_batch, total_dt,
+            self._open_idx, self.n_peak_steps,
+        )
 
     def _open(self, P_batch: torch.Tensor) -> torch.Tensor:
         """(P,) — total open probability for each member."""
         return P_batch[:, self._open_idx].sum(dim=1)
+
+    def _start(self, cfg) -> torch.Tensor:
+        """(P, n) sweep start: per-member steady state at cfg.v_hold, or s0."""
+        if cfg.steady_state_start:
+            return stationary_distribution(self._Q_batch(cfg.v_hold))
+        return self.s0
 
     # ── per-protocol MSE losses ───────────────────────────────────────────────
 
     def activation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """Weighted-normalised MSE for all P members. Returns (P,)."""
         cfg = self.act_proto.cfg
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
 
         peaks = []
         for V in x_data.tolist():
@@ -347,7 +355,7 @@ class BatchedProtocolSimulator:
     def inactivation_loss(self, x_data: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         cfg = self.inact_proto.cfg
         t_test_dur = max(self.t_total - cfg.t_hold - cfg.t_cond, 1e-3)
-        P_hold = self._prop(self.s0, cfg.v_hold, cfg.t_hold)
+        P_hold = self._prop(self._start(cfg), cfg.v_hold, cfg.t_hold)
 
         currents = []
         for V_cond in x_data.tolist():
@@ -370,9 +378,10 @@ class BatchedProtocolSimulator:
         cfg = self.csi_proto.cfg
         t_initial = cfg.t_initial
 
-        _, baseline_peak = self._prop_peak(self.s0, cfg.v_hold, t_initial)
+        s_start = self._start(cfg)
+        _, baseline_peak = self._prop_peak(s_start, cfg.v_hold, t_initial)
         baseline_peak = baseline_peak.clamp(min=1e-12)
-        P_after = self._prop(self.s0, cfg.v_hold, t_initial)
+        P_after = self._prop(s_start, cfg.v_hold, t_initial)
 
         currents = []
         for t_pulse in x_sim.tolist():
@@ -392,7 +401,7 @@ class BatchedProtocolSimulator:
     def recovery_loss(self, x_sim: np.ndarray, y_data: np.ndarray) -> torch.Tensor:
         """x_sim: absolute test-pulse start times in seconds."""
         cfg = self.rec_proto.cfg
-        P0 = self._prop(self.s0, cfg.v_hold, cfg.t_prep)
+        P0 = self._prop(self._start(cfg), cfg.v_hold, cfg.t_prep)
         P_inact, g_pre = self._prop_peak(P0, cfg.v_depo, cfg.t_pulse - cfg.t_prep)
         g_pre = g_pre.clamp(min=1e-12)
 
@@ -418,8 +427,9 @@ class BatchedProtocolSimulator:
         weights: dict,
         csi_cfg: CSInactivationConfig = None,
         rec_cfg: RecoveryConfig = None,
+        reg_lambda: float = 0.0,
     ) -> torch.Tensor:
-        """Weighted sum of protocol MSEs. Returns (P,)."""
+        """Weighted sum of protocol MSEs plus optional L2 regularization. Returns (P,)."""
         active = {k: v for k, v in exp_data.items() if v is not None}
         loss = torch.zeros(self.P, dtype=self.dtype, device=self.device)
 
@@ -451,6 +461,10 @@ class BatchedProtocolSimulator:
                 x_sim, np.asarray(y)
             )
 
+        # NOTE: regularization is applied in TorchDEOptimizer._eval_population
+        # (which has the *free* params + prior), not here — this simulator only
+        # sees the full expanded params.  reg_lambda is accepted for signature
+        # compatibility but intentionally unused.
         return loss
 
 
@@ -488,12 +502,23 @@ class TorchDEOptimizer:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         self.exp = experimental_data
         self.w = weights or dict(self._DEFAULT_WEIGHTS)
+        # Resting-inactivation penalty, as in TorchCostFunction.
+        self.rest_lambda = rest_lambda
+        self.v_rest = v_rest
+        self._inact_idx = (
+            [i for i, s in enumerate(msm_def.states) if s.state_type == "inactivated"]
+            if msm_def is not None
+            else []
+        )
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -502,14 +527,22 @@ class TorchDEOptimizer:
         self._g_k_max = g_k_max
         self._t_total = t_total
         self._n_peak_steps = n_peak_steps
+        self.reg_lambda = reg_lambda
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
+        # Prior (free initial guess) for the scale-invariant regularizer.
+        if msm_def is not None:
+            self._reg_prior = torch.tensor(
+                msm_def.free_initial_guess, dtype=self.dtype, device=self.device
+            )
+        else:
+            self._reg_prior = None
 
     def _eval_population(
-        self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+        self, raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask=None
     ) -> torch.Tensor:
         """Evaluate (P,) fitness values for all members in the raw population."""
-        params_free = _from_raw_batch(raw, lb, ub)  # (P, n_free)
+        params_free = _from_raw_batch(raw, lb, ub, log_mask)  # (P, n_free)
         params_full = _expand_batch(params_free, self._msm_def)  # (P, n_full)
         sim = BatchedProtocolSimulator(
             params_full,
@@ -522,7 +555,16 @@ class TorchDEOptimizer:
             t_total=self._t_total,
             n_peak_steps=self._n_peak_steps,
         )
-        return sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg)
+        loss = sim.total_loss(self.exp, self.w, self._csi_cfg, self._rec_cfg)
+        if self.reg_lambda > 0.0 and self._reg_prior is not None:
+            # Scale-invariant pull toward the prior, per population member (P,).
+            loss = loss + self.reg_lambda * prior_penalty(
+                params_free, self._reg_prior, lb, ub, log_mask
+            )
+        if self.rest_lambda > 0.0 and self._inact_idx:
+            p_rest = stationary_distribution(sim._Q_batch(self.v_rest))  # (P, n)
+            loss = loss + self.rest_lambda * p_rest[:, self._inact_idx].sum(dim=1) ** 2
+        return loss
 
     def optimize(
         self,
@@ -532,21 +574,44 @@ class TorchDEOptimizer:
         F: float = 0.8,
         CR: float = 0.9,
         progress_callback: Optional[Callable] = None,
-    ) -> np.ndarray:
+        strategy: str = "adaptive",
+        log_mask: Optional[list] = None,
+        return_population: bool = False,
+        p_best: float = 0.2,
+        init_center: Optional[np.ndarray] = None,
+        init_spread: float = 0.5,
+    ):
         """
-        Run DE/rand/1/bin and return best free-parameter vector as numpy array.
+        Run Differential Evolution and return the best free-parameter vector.
 
         Parameters
         ----------
         bounds    : [(lb, ub), …]  one per free parameter
         pop_size  : population size P
         maxiter   : number of generations
-        F         : differential weight  (mutation scale, typically 0.5-0.9)
-        CR        : crossover probability (typically 0.7-1.0)
+        F         : differential weight (used only by the fixed 'rand1' strategy)
+        CR        : crossover probability (used only by 'rand1')
+        strategy  : 'adaptive' — JADE-style DE/current-to-pbest/1 with
+                    self-adapting F/CR (default, more robust);
+                    'rand1'    — classic fixed-F/CR DE/rand/1/bin.
+        log_mask  : per-free-parameter log-scale flags (e.g.
+                    ``msm_def.free_log_mask``).  None → inferred from bounds.
+        return_population : if True, also return the whole final population
+                    (free params) sorted best-first, for multi-start polishing.
+        p_best    : fraction of the population treated as "pbest" élite in the
+                    adaptive strategy.
+        init_center : optional free-parameter vector to centre the initial
+                    population on (e.g. a fit of a related dataset).  Member 0
+                    is the centre itself; the rest are perturbed around it.
+                    None → sample the whole box.
+        init_spread : perturbation scale around *init_center*: std of the
+                    log-factor for log-scaled params, fraction of (ub − lb)
+                    for linear ones.
 
         Returns
         -------
-        best_params_free : np.ndarray shape (n_free,)
+        best_params_free : np.ndarray (n_free,)
+        or, if return_population: (best_params_free, population_free_sorted (P, n_free), fitness_sorted (P,))
         """
         device, dtype = self.device, self.dtype
         n = len(bounds)
@@ -554,42 +619,98 @@ class TorchDEOptimizer:
 
         lb = torch.tensor([b[0] for b in bounds], dtype=dtype, device=device)
         ub = torch.tensor([b[1] for b in bounds], dtype=dtype, device=device)
+        mask = build_log_mask(bounds, log_mask, device=device)
 
-        # Initialise population uniformly in parameter space, then logit-transform
-        params_init = lb + (ub - lb) * torch.rand(P, n, dtype=dtype, device=device)
-        raw = _to_raw_batch(params_init, lb, ub)  # (P, n)
+        # Initialise population.  For log-scaled parameters sample log-uniformly
+        # so orders of magnitude are covered evenly; linear params stay uniform.
+        u = torch.rand(P, n, dtype=dtype, device=device)
+        lin_init = lb + (ub - lb) * u
+        log_init = torch.exp(torch.log(lb.clamp_min(1e-30)) + (torch.log(ub) - torch.log(lb.clamp_min(1e-30))) * u)
+        params_init = torch.where(mask, log_init, lin_init)
+        if init_center is not None:
+            c = torch.as_tensor(np.asarray(init_center, float), dtype=dtype, device=device)
+            z = init_spread * torch.randn(P, n, dtype=dtype, device=device)
+            params_init = torch.where(mask, c * torch.exp(z), c + z * (ub - lb))
+            params_init[0] = c
+            params_init = torch.minimum(torch.maximum(params_init, lb), ub)
+        raw = _to_raw_batch(params_init, lb, ub, mask)  # (P, n)
 
         with torch.no_grad():
-            fitness = self._eval_population(raw, lb, ub)  # (P,)
+            fitness = self._eval_population(raw, lb, ub, mask)  # (P,)
+        fitness = torch.nan_to_num(fitness, nan=1e6, posinf=1e6)
+
+        adaptive = strategy == "adaptive"
+        mu_F, mu_CR = 0.5, 0.5  # JADE adaptation means
+        n_pbest = max(2, int(round(p_best * P)))
 
         for gen in range(maxiter):
-            # Mutation: DE/rand/1 — three distinct random permutations
-            r1 = torch.randperm(P, device=device)
-            r2 = torch.randperm(P, device=device)
-            r3 = torch.randperm(P, device=device)
-            mutant = raw[r1] + F * (raw[r2] - raw[r3])  # (P, n)
+            if adaptive:
+                # Per-member control parameters (JADE): F ~ Cauchy(mu_F,0.1),
+                # CR ~ Normal(mu_CR,0.1).
+                F_i = (
+                    torch.distributions.Cauchy(mu_F, 0.1)
+                    .sample((P,))
+                    .to(device=device, dtype=dtype)
+                    .clamp(0.05, 1.0)
+                )
+                CR_i = (
+                    (mu_CR + 0.1 * torch.randn(P, device=device, dtype=dtype))
+                    .clamp(0.0, 1.0)
+                )
+                # DE/current-to-pbest/1: pull toward a random élite member.
+                elite_order = torch.argsort(fitness)[:n_pbest]
+                pbest_pick = elite_order[torch.randint(n_pbest, (P,), device=device)]
+                r1 = torch.randint(P, (P,), device=device)
+                r2 = torch.randint(P, (P,), device=device)
+                Fc = F_i.unsqueeze(1)
+                mutant = (
+                    raw + Fc * (raw[pbest_pick] - raw) + Fc * (raw[r1] - raw[r2])
+                )
+                cross = torch.rand(P, n, dtype=dtype, device=device) < CR_i.unsqueeze(1)
+            else:
+                # Classic DE/rand/1 with fixed F/CR.
+                r1 = torch.randperm(P, device=device)
+                r2 = torch.randperm(P, device=device)
+                r3 = torch.randperm(P, device=device)
+                mutant = raw[r1] + F * (raw[r2] - raw[r3])
+                cross = torch.rand(P, n, dtype=dtype, device=device) < CR
 
-            # Crossover: binomial with guaranteed minimum one mutant gene
-            mask = torch.rand(P, n, dtype=dtype, device=device) < CR
+            # Guarantee at least one mutant gene per trial.
             j_rand = torch.randint(n, (P,), device=device)
-            mask[torch.arange(P, device=device), j_rand] = True
-            trial = torch.where(mask, mutant, raw)  # (P, n)
+            cross[torch.arange(P, device=device), j_rand] = True
+            trial = torch.where(cross, mutant, raw)  # (P, n)
 
             with torch.no_grad():
-                trial_fitness = self._eval_population(trial, lb, ub)  # (P,)
+                trial_fitness = self._eval_population(trial, lb, ub, mask)  # (P,)
+            trial_fitness = torch.nan_to_num(trial_fitness, nan=1e6, posinf=1e6)
 
-            # Selection: keep trial if it improves fitness
+            # Selection: keep trial if it improves fitness.
             better = trial_fitness < fitness
             raw = torch.where(better.unsqueeze(1), trial, raw)
             fitness = torch.where(better, trial_fitness, fitness)
 
+            if adaptive and bool(better.any()):
+                # Update adaptation means from the successful control params.
+                succ_F = F_i[better]
+                succ_CR = CR_i[better]
+                # Lehmer mean for F, arithmetic mean for CR (JADE).
+                lehmer = float((succ_F ** 2).sum() / succ_F.sum().clamp_min(1e-12))
+                mu_F = 0.9 * mu_F + 0.1 * lehmer
+                mu_CR = 0.9 * mu_CR + 0.1 * float(succ_CR.mean())
+
             if progress_callback and (gen % 5 == 0 or gen == maxiter - 1):
                 progress_callback(gen + 1, float(fitness.min()), None)
 
-        best_idx = int(fitness.argmin())
-        best_raw = raw[best_idx : best_idx + 1]  # (1, n)
-        best_free = _from_raw_batch(best_raw, lb, ub).squeeze(0)
-        return best_free.cpu().numpy()
+        order = torch.argsort(fitness)
+        best_free = _from_raw_batch(raw[order[:1]], lb, ub, mask).squeeze(0)
+        if not return_population:
+            return best_free.cpu().numpy()
+        pop_sorted = _from_raw_batch(raw[order], lb, ub, mask)  # (P, n)
+        return (
+            best_free.cpu().numpy(),
+            pop_sorted.cpu().numpy(),
+            fitness[order].cpu().numpy(),
+        )
 
 
 # ─── full pipeline: DE → Adam → L-BFGS ──────────────────────────────────────
@@ -619,9 +740,12 @@ class TorchPipelineOptimizer:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = 3.0,
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         device = device or get_device()
         dtype = dtype or preferred_dtype(device)
@@ -639,6 +763,9 @@ class TorchPipelineOptimizer:
             n_peak_steps=n_peak_steps,
             device=device,
             dtype=dtype,
+            reg_lambda=reg_lambda,
+            rest_lambda=rest_lambda,
+            v_rest=v_rest,
         )
 
         self._de = TorchDEOptimizer(**_common)
@@ -657,9 +784,13 @@ class TorchPipelineOptimizer:
             n_peak_steps=n_peak_steps,
             device=device,
             dtype=dtype,
+            reg_lambda=reg_lambda,
+            rest_lambda=rest_lambda,
+            v_rest=v_rest,
         )
         self._torch_cost = TorchCostFunction(**_local_kw)
         self._local = TorchParameterOptimizer(self._torch_cost)
+        self._msm_def = msm_def
 
     def optimize(
         self,
@@ -674,6 +805,11 @@ class TorchPipelineOptimizer:
         progress_callback: Optional[Callable] = None,
         skip_de: bool = False,
         initial_params: Optional[np.ndarray] = None,
+        strategy: str = "adaptive",
+        n_starts: int = 5,
+        seed: Optional[int] = None,
+        de_init_center: Optional[np.ndarray] = None,
+        de_init_spread: float = 0.5,
     ) -> OptimizeResult:
         """
         Run the full pipeline.
@@ -683,25 +819,44 @@ class TorchPipelineOptimizer:
         bounds         : [(lb, ub), …] for free parameters only
         pop_size       : DE population size
         de_maxiter     : DE generations
-        F              : DE mutation scale
-        CR             : DE crossover probability
+        F              : DE mutation scale ('rand1' strategy only)
+        CR             : DE crossover probability ('rand1' strategy only)
         n_adam         : Adam steps
         adam_lr        : Adam learning rate
         n_lbfgs        : L-BFGS outer steps
         skip_de        : if True, skip DE and start local optimisation from
                          *initial_params* (or the MSM initial guess if None)
         initial_params : starting point when skip_de=True (free params, numpy array)
+        strategy       : DE strategy, 'adaptive' (JADE) or 'rand1' (classic).
+        n_starts       : number of top DE members to polish with Adam→L-BFGS;
+                         the lowest-cost polished result wins.  n_starts=1 keeps
+                         the old best-only behaviour.
+        seed           : if given, seed the global torch RNG so the run is fully
+                         reproducible.  DE is the only stochastic stage (Adam /
+                         L-BFGS are deterministic given the DE-selected starts),
+                         so seeding once here fixes the whole pipeline.
+        de_init_center : optional free-parameter vector the DE population is
+                         centred on (see TorchDEOptimizer.optimize).
+        de_init_spread : perturbation scale around *de_init_center*.
 
         Returns
         -------
         OptimizeResult with .x (best free params), .fun, .nit
         """
+        if seed is not None:
+            torch.manual_seed(int(seed))
         de_gen = [0]
+        # Log-scale mask from the MSM (positive-lower-bound free params); the DE
+        # and local optimisers infer it from the bounds when no MSM is present.
+        log_mask = self._msm_def.free_log_mask if self._msm_def is not None else None
+
+        # Candidate starting points for the local phase (best-first).
+        starts = []
 
         if skip_de:
             if initial_params is None:
                 raise ValueError("initial_params must be provided when skip_de=True")
-            best_free = np.asarray(initial_params, dtype=float)
+            starts = [np.asarray(initial_params, dtype=float)]
         else:
 
             def _de_cb(iteration: int, cost: float, convergence):
@@ -710,30 +865,44 @@ class TorchPipelineOptimizer:
                     progress_callback(iteration, cost, convergence)
 
             # ── Phase 1: DE ──────────────────────────────────────────────────
-            best_free = self._de.optimize(
+            best_free, pop_sorted, _fit = self._de.optimize(
                 bounds=bounds,
                 pop_size=pop_size,
                 maxiter=de_maxiter,
                 F=F,
                 CR=CR,
+                strategy=strategy,
+                log_mask=log_mask,
+                return_population=True,
                 progress_callback=_de_cb,
+                init_center=de_init_center,
+                init_spread=de_init_spread,
             )
+            k = max(1, min(int(n_starts), pop_sorted.shape[0]))
+            starts = [pop_sorted[i] for i in range(k)]
 
-        # ── Phases 2+3: Adam → L-BFGS ────────────────────────────────────────
+        # ── Phases 2+3: Adam → L-BFGS, polished from each candidate start ────
         def _local_cb(iteration: int, cost: float, convergence):
             if progress_callback:
                 progress_callback(de_gen[0] + iteration, cost, convergence)
 
-        result = self._local.optimize(
-            initial_guess=best_free,
-            bounds=bounds,
-            n_adam=n_adam,
-            adam_lr=adam_lr,
-            n_lbfgs=n_lbfgs,
-            progress_callback=_local_cb,
-        )
+        best_result = None
+        for si, x0 in enumerate(starts):
+            # Only the first (best) start streams progress, to keep the log clean.
+            cb = _local_cb if si == 0 else None
+            res = self._local.optimize(
+                initial_guess=x0,
+                bounds=bounds,
+                n_adam=n_adam,
+                adam_lr=adam_lr,
+                n_lbfgs=n_lbfgs,
+                progress_callback=cb,
+                log_mask=log_mask,
+            )
+            if best_result is None or res.fun < best_result.fun:
+                best_result = res
 
-        return result
+        return best_result
 
     def cost_breakdown(self, params_free_np: np.ndarray) -> dict:
         """Per-protocol cost breakdown for the given free-parameter vector."""

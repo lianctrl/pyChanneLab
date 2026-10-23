@@ -9,6 +9,19 @@ from pathlib import Path
 from typing import Tuple, Optional
 
 
+def _parse(source) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+    # The header row is skipped as raw text rather than parsed, so a header
+    # with a different separator (e.g. "x (mV).y.SD") does not collapse the
+    # table to a single column.
+    df = pd.read_csv(source, header=None, skiprows=1)
+    if df.shape[1] < 2:
+        raise ValueError(f"CSV must have at least 2 columns, got {df.shape[1]}")
+    x = df.iloc[:, 0].to_numpy(dtype=float)
+    y = df.iloc[:, 1].to_numpy(dtype=float)
+    y_err = df.iloc[:, 2].to_numpy(dtype=float) if df.shape[1] >= 3 else None
+    return x, y, y_err
+
+
 def load_csv(
     filepath: str | Path,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
@@ -21,13 +34,7 @@ def load_csv(
     y : ndarray
     y_err : ndarray or None
     """
-    df = pd.read_csv(filepath, header=0)
-    if df.shape[1] < 2:
-        raise ValueError(f"CSV must have at least 2 columns, got {df.shape[1]}")
-    x = df.iloc[:, 0].to_numpy(dtype=float)
-    y = df.iloc[:, 1].to_numpy(dtype=float)
-    y_err = df.iloc[:, 2].to_numpy(dtype=float) if df.shape[1] >= 3 else None
-    return x, y, y_err
+    return _parse(filepath)
 
 
 def load_from_bytes(
@@ -36,10 +43,4 @@ def load_from_bytes(
     """Load from raw bytes (e.g. Streamlit UploadedFile.read())."""
     import io
 
-    df = pd.read_csv(io.BytesIO(content), header=0)
-    if df.shape[1] < 2:
-        raise ValueError(f"CSV must have at least 2 columns, got {df.shape[1]}")
-    x = df.iloc[:, 0].to_numpy(dtype=float)
-    y = df.iloc[:, 1].to_numpy(dtype=float)
-    y_err = df.iloc[:, 2].to_numpy(dtype=float) if df.shape[1] >= 3 else None
-    return x, y, y_err
+    return _parse(io.BytesIO(content))

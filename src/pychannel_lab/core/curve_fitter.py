@@ -167,7 +167,7 @@ def fit_curve(
         free_indices = list(range(n_params))
 
     try:
-        popt_free, pcov_free = curve_fit(fit_fn, x, y, p0=p0_free, maxfev=20000)
+        popt_free, pcov_free = curve_fit(fit_fn, x, y, p0=p0_free, maxfev=50000)
         diag = np.diag(pcov_free)
         perr_free = np.where(diag >= 0, np.sqrt(diag), np.nan)
     except Exception:

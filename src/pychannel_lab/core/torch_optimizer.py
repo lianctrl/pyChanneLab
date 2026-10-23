@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from typing import Callable, Optional
 
-from core.config import (
+from .config import (
     ActivationConfig,
     InactivationConfig,
     CSInactivationConfig,
@@ -26,10 +26,17 @@ from core.config import (
     G_K_MAX,
     TIME_PARAMS,
 )
-from core.torch_simulator import (
+from .torch_simulator import (
     TorchProtocolSimulator,
     get_device,
     preferred_dtype,
+    stationary_distribution,
+)
+from .param_transform import (
+    to_raw as _pt_to_raw,
+    from_raw as _pt_from_raw,
+    build_log_mask,
+    prior_penalty,
 )
 
 
@@ -78,12 +85,26 @@ class TorchCostFunction:
         rec_cfg: RecoveryConfig = None,
         g_k_max: float = G_K_MAX,
         t_total: float = TIME_PARAMS["tend"],
-        n_peak_steps: int = 50,
+        n_peak_steps: int = 16,
         device: torch.device = None,
         dtype: torch.dtype = None,
+        reg_lambda: float = 0.0,
+        rest_lambda: float = 0.0,
+        v_rest: float = -90.0,
     ):
         self.exp = experimental_data
         self.w = weights or self._DEFAULT_WEIGHTS
+        self.reg_lambda = reg_lambda
+        # Penalty on the inactivated fraction at rest: normalised data cannot
+        # pin resting availability, so without it the fit may leave a large,
+        # unphysical fraction of channels inactivated at v_rest.
+        self.rest_lambda = rest_lambda
+        self.v_rest = v_rest
+        self._inact_idx = (
+            [i for i, s in enumerate(msm_def.states) if s.state_type == "inactivated"]
+            if msm_def is not None
+            else []
+        )
         self._msm_def = msm_def
         self._act_cfg = act_cfg
         self._inact_cfg = inact_cfg
@@ -94,6 +115,22 @@ class TorchCostFunction:
         self._n_peak_steps = n_peak_steps
         self.device = device or get_device()
         self.dtype = dtype or preferred_dtype(self.device)
+        self._reg_prior, self._reg_lb, self._reg_ub, self._reg_logmask = (
+            self._build_reg_tensors(msm_def)
+        )
+
+    def _build_reg_tensors(self, msm_def):
+        """Prior/bounds/log-mask (free params) for the scale-invariant penalty."""
+        if msm_def is None:
+            return None, None, None, None
+        fb = msm_def.free_bounds
+        lb = torch.tensor([b[0] for b in fb], dtype=self.dtype, device=self.device)
+        ub = torch.tensor([b[1] for b in fb], dtype=self.dtype, device=self.device)
+        prior = torch.tensor(
+            msm_def.free_initial_guess, dtype=self.dtype, device=self.device
+        )
+        mask = torch.tensor(msm_def.free_log_mask, dtype=torch.bool, device=self.device)
+        return prior, lb, ub, mask
 
     def _expand_params(self, free_params: torch.Tensor) -> torch.Tensor:
         """
@@ -174,6 +211,17 @@ class TorchCostFunction:
             target = torch.tensor(y, dtype=params.dtype, device=params.device)
             loss = loss + self.w.get("recovery", 1.0) * ((pred - target) ** 2).mean()
 
+        if self.reg_lambda > 0.0 and self._reg_prior is not None:
+            # Scale-invariant pull toward the prior (initial guess); `params` is
+            # the free-length vector, matching the free prior/bounds/mask.
+            loss = loss + self.reg_lambda * prior_penalty(
+                params, self._reg_prior, self._reg_lb, self._reg_ub, self._reg_logmask
+            )
+
+        if self.rest_lambda > 0.0 and self._inact_idx:
+            p_rest = stationary_distribution(sim._Q(self.v_rest))
+            loss = loss + self.rest_lambda * p_rest[self._inact_idx].sum() ** 2
+
         return loss
 
     def total_cost_numpy(self, params_np: np.ndarray) -> float:
@@ -235,16 +283,16 @@ class TorchParameterOptimizer:
         params_np: np.ndarray,
         lb: torch.Tensor,
         ub: torch.Tensor,
+        log_mask: torch.Tensor = None,
     ) -> torch.Tensor:
         p = torch.tensor(params_np, dtype=lb.dtype, device=lb.device)
-        normalized = ((p - lb) / (ub - lb)).clamp(0.001, 0.999)
-        return torch.logit(normalized)
+        return _pt_to_raw(p, lb, ub, log_mask)
 
     @staticmethod
     def _from_raw(
-        raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor
+        raw: torch.Tensor, lb: torch.Tensor, ub: torch.Tensor, log_mask: torch.Tensor = None
     ) -> torch.Tensor:
-        return lb + (ub - lb) * torch.sigmoid(raw)
+        return _pt_from_raw(raw, lb, ub, log_mask)
 
     def optimize(
         self,
@@ -254,6 +302,7 @@ class TorchParameterOptimizer:
         adam_lr: float = 0.05,
         n_lbfgs: int = 200,
         progress_callback: Optional[Callable] = None,
+        log_mask: Optional[list] = None,
     ) -> OptimizeResult:
         """
         Run Adam followed by L-BFGS.
@@ -276,11 +325,12 @@ class TorchParameterOptimizer:
 
         lb = torch.tensor([b[0] for b in bounds], dtype=dtype, device=device)
         ub = torch.tensor([b[1] for b in bounds], dtype=dtype, device=device)
+        mask = build_log_mask(bounds, log_mask, device=device)
 
-        raw = self._to_raw(initial_guess, lb, ub).detach().requires_grad_(True)
+        raw = self._to_raw(initial_guess, lb, ub, mask).detach().requires_grad_(True)
 
         def get_params() -> torch.Tensor:
-            return self._from_raw(raw, lb, ub)
+            return self._from_raw(raw, lb, ub, mask)
 
         def compute_loss() -> torch.Tensor:
             return self.cost(get_params())
@@ -289,14 +339,22 @@ class TorchParameterOptimizer:
 
         if n_adam > 0:
             adam = torch.optim.Adam([raw], lr=adam_lr)
+            best_raw = raw.detach().clone()
+            best_adam_loss = float("inf")
             for i in range(n_adam):
                 adam.zero_grad()
                 loss = compute_loss()
                 loss.backward()
                 adam.step()
                 total_iters[0] += 1
+                loss_val = loss.detach().item()
+                if loss_val < best_adam_loss:
+                    best_adam_loss = loss_val
+                    best_raw = raw.detach().clone()
                 if progress_callback and (i % 10 == 0 or i == n_adam - 1):
-                    progress_callback(total_iters[0], loss.detach().item(), None)
+                    progress_callback(total_iters[0], loss_val, None)
+            with torch.no_grad():
+                raw.copy_(best_raw)
 
         if n_lbfgs > 0:
             lbfgs = torch.optim.LBFGS(
@@ -316,11 +374,23 @@ class TorchParameterOptimizer:
                 last_loss[0] = loss.detach().item()
                 return loss
 
+            prev_loss = float("inf")
+            stall = 0
             for outer in range(n_lbfgs):
                 lbfgs.step(closure)
                 total_iters[0] += 1
                 if progress_callback and (outer % 5 == 0 or outer == n_lbfgs - 1):
                     progress_callback(total_iters[0], last_loss[0], None)
+                # Early stop once L-BFGS has plateaued: strong-Wolfe L-BFGS
+                # converges quadratically, so continuing past the plateau just
+                # burns time (important for the multi-start polish).
+                if abs(prev_loss - last_loss[0]) <= 1e-10 * (1.0 + abs(last_loss[0])):
+                    stall += 1
+                    if stall >= 3:
+                        break
+                else:
+                    stall = 0
+                prev_loss = last_loss[0]
 
         final_params = get_params().detach().cpu().numpy()
         final_cost = self.cost.total_cost_numpy(final_params)

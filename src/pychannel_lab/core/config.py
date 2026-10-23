@@ -68,18 +68,20 @@ INITIAL_GUESS = np.array(
     ]
 )
 
+# Lower bounds are strictly positive so parameters can be optimised in log
+# space (see ParamSpec.log_scale in msm_builder.py).
 PARAMETER_BOUNDS = (
-    (0.0, 2000.0),  # alpha_0
-    (0.0, 5.0),  # alpha_1
-    (0.0, 100.0),  # beta_0
-    (0.0, 5.0),  # beta_1
-    (0.0, 1000.0),  # k_CO_0
-    (0.0, 5.0),  # k_CO_1
-    (0.0, 1000.0),  # k_OC_0
-    (0.0, 5.0),  # k_OC_1
-    (0.0, 2000.0),  # k_CI
-    (0.0, 100.0),  # k_IC
-    (0.0, 1.0),  # f
+    (1e-3, 2000.0),  # alpha_0
+    (1e-4, 5.0),  # alpha_1
+    (1e-3, 100.0),  # beta_0
+    (1e-4, 5.0),  # beta_1
+    (1e-3, 1000.0),  # k_CO_0
+    (1e-4, 5.0),  # k_CO_1
+    (1e-3, 1000.0),  # k_OC_0
+    (1e-4, 5.0),  # k_OC_1
+    (1e-3, 2000.0),  # k_CI
+    (1e-3, 100.0),  # k_IC
+    (0.01, 1.0),  # f — must be strictly > 0 (model has kIC/f**4 terms)
 )
 
 # Optimisation engine settings
@@ -111,6 +113,9 @@ class ActivationConfig:
     v_step: float = 10.0  # mV — voltage step
     t_hold: float = 0.50  # s  — duration of holding phase
     t_test: float = 0.05  # s  — duration of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -125,6 +130,9 @@ class InactivationConfig:
     t_hold: float = 0.50  # s  — initial holding
     t_cond: float = 1.00  # s  — conditioning pulse duration
     # test pulse lasts until end of simulation
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -139,6 +147,9 @@ class CSInactivationConfig:
     max_pulse: float = 0.580  # s  — longest  prepulse (after t_initial)
     pulse_increment: float = 0.030  # s
     t_test_end: float = 1.150  # s  — absolute end of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
 
 
 @dataclass
@@ -153,3 +164,62 @@ class RecoveryConfig:
     max_interval: float = 0.570  # s  — longest  recovery interval
     interval_increment: float = 0.030  # s
     t_end: float = 2.650  # s  — absolute end of test pulse
+    # Start each sweep from the steady state at v_hold (the cell sits there for
+    # seconds between sweeps) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Custom segment-based protocol dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProtocolSegment:
+    """One constant-voltage block in a custom protocol."""
+
+    name: str = ""
+    voltage: float = -90.0  # mV
+    duration: float = 0.100  # s
+
+
+@dataclass
+class CustomProtocolConfig:
+    """
+    Segment-based custom voltage-clamp protocol.
+
+    Build a protocol from an ordered list of constant-voltage segments.
+    One parameter of one segment is swept across simulations (either the
+    voltage value — Family 1 — or the duration — Family 2).
+
+    Observable extraction window is anchored to the *start* of
+    ``obs_segment_idx``, so it naturally follows the swept segment for
+    duration-swept protocols.
+    """
+
+    name: str = "Custom Protocol"
+    segments: list = field(default_factory=list)  # list[ProtocolSegment]
+
+    # --- Sweep axis ---
+    sweep_type: str = "voltage"     # "voltage" | "duration"
+    sweep_segment_idx: int = 0      # which segment is swept
+    sweep_min: float = -90.0
+    sweep_max: float = 60.0
+    sweep_step: float = 10.0
+
+    # --- Observable extraction (window anchored to start of obs_segment_idx) ---
+    obs_segment_idx: int = 1
+    obs_offset: float = 0.0                # s after segment start
+    obs_window_length: float | None = None  # s (None = full segment duration)
+    obs_type: str = "peak_open"            # "peak_open" | "conductance" | "current" | "ratio"
+
+    # Second window for obs_type="ratio" (e.g. I_test / I_pre)
+    obs_ref_segment_idx: int = 0
+    obs_ref_offset: float = 0.0
+    obs_ref_window_length: float | None = None
+
+    enabled: bool = True  # include in optimisation cost
+
+    # Start each sweep from the steady state at the first segment's voltage
+    # (the holding potential) instead of the simulator's initial_state vector.
+    steady_state_start: bool = True
